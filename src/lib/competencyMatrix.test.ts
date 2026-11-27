@@ -23,6 +23,13 @@ import {
   getAuditorNormaLinks,
   getAuditorSectorLinks,
   getAuditorSubsectorLinks,
+  evaluateAuditorInSituStatus,
+  getAuditorInSituStatusVisual,
+  classifyAuditorObservacionSector,
+  summarizeEvaluacionesInSitu,
+  validateAuditorTelefonoDraft,
+  validateAuditorEmailDraft,
+  validateEvaluacionInSituDraft,
   type CompetenciaAuditorEntity,
 } from './competencyMatrix';
 import { INITIAL_NORMAS, INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF } from './extraDomain';
@@ -226,52 +233,46 @@ describe('Phase 4.3 - Technical Competency Matching (ISO 17021-1 clause 7.2)', (
     assert.equal(renewedRes.matchedRole, 'Auditor Líder');
     assert.equal(renewedRes.isExpired, false);
 
-    // Seeded auditor Carlos Mendoza is qualified for ISO 9001:2015 / Sector 17 / Subsector 17.1
-    const carlos = INITIAL_AUDITORES_DETAILED.find((a) => a.nombre.includes('Carlos Mendoza'))!;
-    const carlosCheck = isAuditorQualifiedForScope(
-      carlos.competencias,
+    // Seeded auditor Keyla Soteldo is qualified for ISO 9001:2015 / Sector 17 / Subsector 17.1
+    const keyla = INITIAL_AUDITORES_DETAILED.find((a) =>
+      a.nombre.includes('Keyla Cristina Soteldo')
+    )!;
+    const keylaCheck = isAuditorQualifiedForScope(
+      keyla.competencias,
       'ISO 9001:2015',
       17,
       '17.1',
       '2025-01-01'
     );
-    assert.equal(carlosCheck.qualified, true);
+    assert.equal(keylaCheck.qualified, true);
   });
 });
 
 describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
-  it('filters auditors by full name, credential, or email', () => {
-    const byName = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: 'Roberto' });
+  it('filters auditors by full name, siglas, cédula, or email', () => {
+    const byName = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: 'Félix' });
     assert.equal(byName.length, 1);
-    assert.equal(byName[0].nombre, 'Ing. Roberto Silva');
+    assert.equal(byName[0].nombre, 'Félix Horacio Rojas Machado');
 
-    const byCode = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: '2023-14' });
+    const byCode = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: 'JRP' });
     assert.equal(byCode.length, 1);
-    assert.equal(byCode[0].nombre, 'Dra. Ana Belén Torres');
+    assert.equal(byCode[0].nombre, 'José Ramón Polo Faría');
 
-    const byEmail = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: 'cmendoza@' });
+    const byCedula = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: '5365320' });
+    assert.equal(byCedula.length, 1);
+    assert.equal(byCedula[0].nombre, 'Leonardo Antonio Rojas Gómez');
+
+    const byEmail = filterAuditors(INITIAL_AUDITORES_DETAILED, { query: 'keylasoteldo@' });
     assert.equal(byEmail.length, 1);
-    assert.equal(byEmail[0].nombre, 'Ing. Carlos Mendoza');
+    assert.equal(byEmail[0].nombre, 'Keyla Cristina Soteldo de Páez');
   });
 
   it('filters auditors by qualification status facet', () => {
     const calificados = filterAuditors(INITIAL_AUDITORES_DETAILED, {
       selectedCalificacion: 'Calificado',
     });
-    assert.equal(calificados.length, 4);
+    assert.equal(calificados.length, INITIAL_AUDITORES_DETAILED.length);
     assert.ok(calificados.every((a) => a.calificacion === 'Calificado'));
-
-    const training = filterAuditors(INITIAL_AUDITORES_DETAILED, {
-      selectedCalificacion: 'En Entrenamiento',
-    });
-    assert.equal(training.length, 1);
-    assert.equal(training[0].nombre, 'Lic. Javier Morales');
-
-    const observador = filterAuditors(INITIAL_AUDITORES_DETAILED, {
-      selectedCalificacion: 'Observador',
-    });
-    assert.equal(observador.length, 1);
-    assert.equal(observador[0].nombre, 'Ing. Patricia Salcedo');
   });
 
   it('filters auditors by accredited standard facet', () => {
@@ -279,7 +280,7 @@ describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
       selectedStandard: 'ISO/IEC 27001',
     });
     assert.equal(iso27001.length, 1);
-    assert.equal(iso27001[0].nombre, 'Ing. Roberto Silva');
+    assert.equal(iso27001[0].nombre, 'Auditor Técnico Evaluador');
   });
 
   it('filters auditors by IAF technical sector facet', () => {
@@ -287,8 +288,8 @@ describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
       selectedSectorIaf: '14',
     });
     assert.equal(sector14.length, 2);
-    assert.ok(sector14.some((a) => a.nombre === 'Dra. Ana Belén Torres'));
-    assert.ok(sector14.some((a) => a.nombre === 'Ing. Patricia Salcedo'));
+    assert.ok(sector14.some((a) => a.nombre === 'Félix Horacio Rojas Machado'));
+    assert.ok(sector14.some((a) => a.nombre === 'Leonardo Antonio Rojas Gómez'));
   });
 
   it('sorts auditors alphabetically ascending and descending', () => {
@@ -302,7 +303,7 @@ describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
       sortColumn: 'nombre',
       sortDirection: 'desc',
     });
-    assert.equal(desc[0].nombre, 'Lic. Javier Morales');
+    assert.equal(desc[0].nombre, 'Nordy Armando Fuentes');
   });
 
   it('provides visual metadata for qualification statuses and audit roles', () => {
@@ -320,26 +321,87 @@ describe('Phase 4.3 - Auditor Directory Filtering & Visual Helpers', () => {
   });
 });
 
-describe('Step 3.2 - Auditor Canonical Drafts, M:N Competency Cascade & Persistence Logic', () => {
-  it('validates auditor drafts with length limits and duplicate detection', () => {
+describe('Step 3.2 & Paso 2.1 - Auditor Canonical Drafts, Cédula Validation, M:N Competency Cascade & Persistence Logic', () => {
+  it('validates auditor drafts allowing exact homonyms with distinct cédula and blocking duplicate cédula', () => {
     const empty = createEmptyAuditorFormDraft();
     assert.equal(empty.nombre, '');
 
-    const tooShort = validateAuditorDraft({ nombre: 'A' }, INITIAL_AUDITORES_DETAILED);
-    assert.equal(tooShort.valid, false);
-
-    const dup = validateAuditorDraft(
-      { nombre: '  Ing. Carlos Mendoza  ' },
+    const tooShort = validateAuditorDraft(
+      { nombre: 'A', siglas: 'AA', cedula_identidad: '1234567' },
       INITIAL_AUDITORES_DETAILED
     );
-    assert.equal(dup.valid, false);
+    assert.equal(tooShort.valid, false);
 
+    // Missing cédula on create fails
+    const missingCedula = validateAuditorDraft(
+      { nombre: 'Yurima Carrillo', siglas: 'YC', cedula_identidad: '' },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(missingCedula.valid, false);
+
+    // Exact homonym on nombre & siglas with distinct cédula passes
+    const homonymOk = validateAuditorDraft(
+      {
+        nombre: 'Keyla Cristina Soteldo de Páez',
+        siglas: 'KS',
+        cedula_identidad: '99887766',
+      },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(homonymOk.valid, true);
+
+    // Duplicate active cédula fails
+    const dupCedula = validateAuditorDraft(
+      {
+        nombre: 'Otro Auditor',
+        siglas: 'OA',
+        cedula_identidad: ' 4165827 ',
+      },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(dupCedula.valid, false);
+    assert.equal(dupCedula.message, 'Ya existe un auditor activo con esa cédula de identidad.');
+
+    // Invalid year bounds rejected
+    const badYearNormas = validateAuditorDraft(
+      {
+        nombre: 'Auditor Prueba Año',
+        siglas: 'APA',
+        cedula_identidad: '19001234',
+        anio_actualizacion_normas: 1989,
+      },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(badYearNormas.valid, false);
+
+    const badYearSectores = validateAuditorDraft(
+      {
+        nombre: 'Auditor Prueba Año',
+        siglas: 'APA',
+        cedula_identidad: '19001234',
+        anio_actualizacion_sectores: 2101,
+      },
+      INITIAL_AUDITORES_DETAILED
+    );
+    assert.equal(badYearSectores.valid, false);
+
+    // Self-edit passes even with existing cédula (and seeded test auditor with null cédula)
     const selfEdit = validateAuditorDraft(
       createAuditorDraftFromEntity(INITIAL_AUDITORES_DETAILED[0]),
       INITIAL_AUDITORES_DETAILED,
       INITIAL_AUDITORES_DETAILED[0].id
     );
     assert.equal(selfEdit.valid, true);
+
+    const testUserSeed = INITIAL_AUDITORES_DETAILED.find(
+      (a) => a.id === '33333333-3333-3333-3333-333333333333'
+    )!;
+    const testUserEdit = validateAuditorDraft(
+      createAuditorDraftFromEntity(testUserSeed),
+      INITIAL_AUDITORES_DETAILED,
+      testUserSeed.id
+    );
+    assert.equal(testUserEdit.valid, true);
   });
 
   it('filters Sub-Sector IAF options in live cascade when Sector IAF changes', () => {
@@ -568,5 +630,177 @@ describe('Step 3.2 - Auditor Canonical Drafts, M:N Competency Cascade & Persiste
     assert.ok(audDetailHtml.includes('data-resizable-table="auditor-tab-sectores"'));
     assert.ok(audDetailHtml.includes('data-resizable-table="auditor-tab-subsectores"'));
     assert.equal(assertZeroUuidExposure(audDetailHtml).compliant, true);
+  });
+});
+
+describe('Paso 2.1 - Evaluación In Situ, Clasificación de Experto Técnico y Validación de Contactos', () => {
+  it('evaluates all 6 in-situ status states deterministically', () => {
+    const refDate = '2026-06-01';
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: false,
+          proxima_evaluacion_in_situ_fecha: '2027-09-01',
+          observaciones_evaluacion: '',
+          observacion_sectores: '',
+        },
+        refDate
+      ),
+      'Vigente'
+    );
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: false,
+          proxima_evaluacion_in_situ_fecha: '2026-07-15',
+          observaciones_evaluacion: '',
+          observacion_sectores: '',
+        },
+        refDate
+      ),
+      'Por Vencer'
+    );
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: false,
+          proxima_evaluacion_in_situ_fecha: '2025-08-01',
+          observaciones_evaluacion: '',
+          observacion_sectores: '',
+        },
+        refDate
+      ),
+      'Vencido'
+    );
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: true,
+          proxima_evaluacion_in_situ_fecha: null,
+          observaciones_evaluacion: '',
+          observacion_sectores: '',
+        },
+        refDate
+      ),
+      'S/R'
+    );
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: true,
+          proxima_evaluacion_in_situ_fecha: null,
+          observaciones_evaluacion: 'PENDIENTE POR EVALUACIÓN IN SITU',
+          observacion_sectores: '',
+        },
+        refDate
+      ),
+      'Pendiente Evaluación'
+    );
+
+    assert.equal(
+      evaluateAuditorInSituStatus(
+        {
+          sin_registro_evaluacion: false,
+          proxima_evaluacion_in_situ_fecha: '2027-01-01',
+          observaciones_evaluacion: '',
+          observacion_sectores: 'CONDICIONADO EN SECTOR 9',
+        },
+        refDate
+      ),
+      'Condicionado'
+    );
+
+    assert.equal(getAuditorInSituStatusVisual('Por Vencer').label, 'Por Vencer');
+    assert.equal(getAuditorInSituStatusVisual('S/R').label, 'S/R');
+  });
+
+  it('classifies observacion_sectores needing Experto Técnico and extracts valid IAF sectors 1..39 only', () => {
+    const clean = classifyAuditorObservacionSector({
+      observacion_sectores: '',
+      observaciones_evaluacion: '',
+    });
+    assert.equal(clean.requiereExpertoTecnico, false);
+    assert.deepEqual(clean.sectoresCondicionados, []);
+
+    const jrp = classifyAuditorObservacionSector({
+      observacion_sectores: 'Sector 9 y 38 con Experto tecnico.',
+      observaciones_evaluacion: 'SECTOR 9 Y 38 CON EXPERTO TÉCNICO',
+    });
+    assert.equal(jrp.requiereExpertoTecnico, true);
+    assert.deepEqual(jrp.sectoresCondicionados, [9, 38]);
+
+    // Ignores normative numbers like 14001 or 9001 (> 39)
+    const nf = classifyAuditorObservacionSector({
+      observacion_sectores: 'SECTOR 4, 5 y 38 CON EXP TECNICO PARA ISO 14001',
+      observaciones_evaluacion: '',
+    });
+    assert.equal(nf.requiereExpertoTecnico, true);
+    assert.deepEqual(nf.sectoresCondicionados, [4, 5, 38]);
+  });
+
+  it('summarizes active evaluaciones in situ and validates phone/email/evaluation child drafts', () => {
+    const emptySummary = summarizeEvaluacionesInSitu([]);
+    assert.equal(emptySummary.sin_registro_evaluacion, true);
+    assert.equal(emptySummary.ultima_evaluacion_in_situ_fecha, null);
+
+    const summary = summarizeEvaluacionesInSitu([
+      {
+        id: 'ev-1',
+        id_auditor: 'aud-1',
+        ultima_evaluacion_fecha: '2015-05-01',
+        proxima_evaluacion_fecha: '2018-05-01',
+        deleted_at: null,
+      },
+      {
+        id: 'ev-2',
+        id_auditor: 'aud-1',
+        ultima_evaluacion_fecha: '2024-11-01',
+        proxima_evaluacion_fecha: '2027-11-01',
+        deleted_at: null,
+      },
+      {
+        id: 'ev-deleted',
+        id_auditor: 'aud-1',
+        ultima_evaluacion_fecha: '2029-01-01',
+        proxima_evaluacion_fecha: '2032-01-01',
+        deleted_at: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    assert.equal(summary.ultima_evaluacion_in_situ_fecha, '2024-11-01');
+    assert.equal(summary.proxima_evaluacion_in_situ_fecha, '2027-11-01');
+    assert.equal(summary.sin_registro_evaluacion, false);
+
+    assert.equal(
+      validateAuditorTelefonoDraft(
+        { telefono: '04166225576', tipo_telefono: 'Móvil', es_principal: true },
+        [{ telefono: '04166225576', deleted_at: null }]
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateAuditorEmailDraft(
+        { email: 'nuevo@fondonorma.test', tipo_email: 'Trabajo', es_principal: false },
+        [{ email: 'otro@fondonorma.test', deleted_at: null }]
+      ).valid,
+      true
+    );
+    assert.equal(
+      validateEvaluacionInSituDraft({
+        etiqueta_periodo: '',
+        norma_referencia: '',
+        sector_area_evaluado: '',
+        ultima_evaluacion_fecha: null,
+        proxima_evaluacion_fecha: null,
+        ultima_evaluacion_texto: '',
+        proxima_evaluacion_texto: '',
+        observaciones: '',
+      }).valid,
+      false
+    );
   });
 });

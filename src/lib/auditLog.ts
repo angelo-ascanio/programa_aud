@@ -46,6 +46,48 @@ export interface ResolvedActorDisplay {
   formatted: string;
 }
 
+export interface AuditorActorSource {
+  id: string;
+  nombre: string;
+  email?: string | null;
+  emails?: ReadonlyArray<{
+    email: string;
+    es_principal?: boolean;
+    deleted_at?: string | null;
+  }>;
+  deleted_at?: string | null;
+}
+
+/**
+ * Merges active auditor names and primary emails into an actor directory
+ * without exposing raw UUIDs or overwriting richer profile entries when present.
+ */
+export function mergeAuditorsIntoActorDirectory(
+  baseDirectory: Readonly<Record<string, ActorDirectoryEntry>>,
+  auditors: ReadonlyArray<AuditorActorSource>
+): Record<string, ActorDirectoryEntry> {
+  const next: Record<string, ActorDirectoryEntry> = { ...baseDirectory };
+  for (const aud of auditors) {
+    if (!aud.id || aud.deleted_at) continue;
+    const activeEmails = (aud.emails || []).filter((em) => !em.deleted_at && Boolean(em.email?.trim()));
+    const primaryEmail =
+      activeEmails.find((em) => em.es_principal)?.email.trim() ||
+      activeEmails[0]?.email.trim() ||
+      aud.email?.trim() ||
+      null;
+
+    const existing = next[aud.id];
+    const resolvedName = aud.nombre?.trim() || existing?.nombre || 'Auditor Evaluador';
+    const resolvedEmail = existing?.email || primaryEmail || null;
+
+    next[aud.id] = {
+      nombre: existing?.nombre || resolvedName,
+      email: resolvedEmail,
+    };
+  }
+  return next;
+}
+
 /**
  * Resolves the human-readable actor name and email without ever exposing raw UUIDs.
  */

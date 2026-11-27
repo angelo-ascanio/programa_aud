@@ -286,6 +286,7 @@ import {
 } from './lib/archiveGovernance';
 import {
   SEEDED_ACTOR_DIRECTORY,
+  mergeAuditorsIntoActorDirectory,
   type ActorDirectoryEntry,
   type AuditLogEntry,
 } from './lib/auditLog';
@@ -807,6 +808,11 @@ import {
   type CompetenciaTipo,
 } from './lib/competencyMatrix';
 import {
+  hydrateAuditoresFromSupabase,
+  saveAuditorProfile,
+  type AuditorSupabaseClient,
+} from './lib/auditorPersistence';
+import {
   INITIAL_EXPERTOS_TECNICOS,
   applyExpertoCompetenciaSectorCascade,
   createDefaultExpertoTecnicoViewState,
@@ -903,6 +909,9 @@ const getShareSupabaseClient = (): ShareSupabaseClient =>
 
 const getExpertoSupabaseClient = (): ExpertoSupabaseClient =>
   supabase as unknown as ExpertoSupabaseClient;
+
+const getAuditorSupabaseClient = (): AuditorSupabaseClient =>
+  supabase as unknown as AuditorSupabaseClient;
 
 interface AppState {
   booting: boolean;
@@ -23951,9 +23960,78 @@ function bindAuthenticatedEvents(): void {
   });
 
   const syncAuditorDraftFromDom = (): AuditorFormDraft => {
-    const nombre =
-      (document.getElementById('auditorNombreInput') as HTMLInputElement | null)?.value ?? '';
-    const next: AuditorFormDraft = { nombre };
+    const selectedAud = state.auditorDomain.selectedAuditorId
+      ? state.domainData.allAuditorsDetailed.find(
+          (a) => a.id === state.auditorDomain.selectedAuditorId
+        )
+      : undefined;
+    const baseDraft =
+      state.auditorDomain.formDraft ??
+      (selectedAud ? createAuditorDraftFromEntity(selectedAud) : createEmptyAuditorFormDraft());
+
+    const readInput = (id: string): string | null => {
+      const el = document.getElementById(id) as
+        | HTMLInputElement
+        | HTMLTextAreaElement
+        | HTMLSelectElement
+        | null;
+      return el ? el.value : null;
+    };
+    const readCheckbox = (id: string): boolean | null => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      return el ? Boolean(el.checked) : null;
+    };
+    const parseYearInput = (raw: string | null, fallback: number | null): number | null => {
+      if (raw === null) return fallback;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
+    const nombreVal = readInput('auditorNombreInput');
+    const siglasVal = readInput('auditorSiglasInput');
+    const cedulaVal = readInput('auditorCedulaInput');
+    const profesionVal = readInput('auditorProfesionInput');
+    const esquemasVal = readInput('auditorEsquemasComplementariosInput');
+    const anioNormasVal = readInput('auditorAnioActualizacionNormasInput');
+    const sgsSecVal = readInput('auditorSistemaGestionSecundarioInput');
+    const ultTextoVal = readInput('auditorUltimaEvalTextoInput');
+    const proxTextoVal = readInput('auditorProximaEvalTextoInput');
+    const ultFechaVal = readInput('auditorUltimaEvalFechaInput');
+    const proxFechaVal = readInput('auditorProximaEvalFechaInput');
+    const sinRegVal = readCheckbox('auditorSinRegistroEvalInput');
+    const sectorAreaVal = readInput('auditorSectorAreaEvalInput');
+    const obsEvalVal = readInput('auditorObsEvalInput');
+    const anioSectoresVal = readInput('auditorAnioActualizacionSectoresInput');
+    const obsSectoresVal = readInput('auditorObsSectoresInput');
+
+    const next: AuditorFormDraft = {
+      ...baseDraft,
+      nombre: nombreVal ?? baseDraft.nombre,
+      siglas: siglasVal ?? baseDraft.siglas,
+      cedula_identidad: cedulaVal ?? baseDraft.cedula_identidad,
+      profesion: profesionVal ?? baseDraft.profesion,
+      esquemas_complementarios: esquemasVal ?? baseDraft.esquemas_complementarios,
+      anio_actualizacion_normas: parseYearInput(anioNormasVal, baseDraft.anio_actualizacion_normas),
+      sistema_gestion_secundario: sgsSecVal ?? baseDraft.sistema_gestion_secundario,
+      ultima_evaluacion_in_situ_texto: ultTextoVal ?? baseDraft.ultima_evaluacion_in_situ_texto,
+      proxima_evaluacion_in_situ_texto: proxTextoVal ?? baseDraft.proxima_evaluacion_in_situ_texto,
+      ultima_evaluacion_in_situ_fecha:
+        ultFechaVal !== null ? ultFechaVal.trim() || null : baseDraft.ultima_evaluacion_in_situ_fecha,
+      proxima_evaluacion_in_situ_fecha:
+        proxFechaVal !== null
+          ? proxFechaVal.trim() || null
+          : baseDraft.proxima_evaluacion_in_situ_fecha,
+      sin_registro_evaluacion: sinRegVal ?? baseDraft.sin_registro_evaluacion,
+      sector_area_evaluado_texto: sectorAreaVal ?? baseDraft.sector_area_evaluado_texto,
+      observaciones_evaluacion: obsEvalVal ?? baseDraft.observaciones_evaluacion,
+      anio_actualizacion_sectores: parseYearInput(
+        anioSectoresVal,
+        baseDraft.anio_actualizacion_sectores
+      ),
+      observacion_sectores: obsSectoresVal ?? baseDraft.observacion_sectores,
+    };
     state.auditorDomain.formDraft = next;
     return next;
   };
@@ -23971,10 +24049,11 @@ function bindAuthenticatedEvents(): void {
     const isCreateMode =
       Boolean(state.auditorDomain.isCreating) && !state.auditorDomain.selectedAuditorId;
     const audId = state.auditorDomain.selectedAuditorId;
+    const existingSnapshot = [...state.domainData.allAuditorsDetailed];
 
     const validation = validateAuditorDraft(
       draft,
-      state.domainData.allAuditorsDetailed,
+      existingSnapshot,
       isCreateMode ? undefined : audId || undefined
     );
     if (!validation.valid) {
@@ -23991,13 +24070,31 @@ function bindAuthenticatedEvents(): void {
       const newAuditor: AuditorDetailEntity = {
         id: newId,
         nombre: norm.nombre,
-        titulo_profesional: 'Auditor Técnico Evaluador',
-        codigo_credencial: '',
+        siglas: norm.siglas,
+        cedula_identidad: norm.cedula_identidad,
+        profesion: norm.profesion,
+        esquemas_complementarios: norm.esquemas_complementarios,
+        anio_actualizacion_normas: norm.anio_actualizacion_normas,
+        sistema_gestion_secundario: norm.sistema_gestion_secundario,
+        ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
+        proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
+        ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
+        proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
+        sin_registro_evaluacion: norm.sin_registro_evaluacion,
+        sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
+        observaciones_evaluacion: norm.observaciones_evaluacion,
+        anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
+        observacion_sectores: norm.observacion_sectores,
+        telefonos: [],
+        emails: [],
+        evaluaciones_in_situ: [],
+        titulo_profesional: norm.profesion || 'Auditor Técnico Evaluador',
+        codigo_credencial: norm.siglas,
         email: '',
         telefono: '',
-        biografia: '',
+        biografia: norm.observaciones_evaluacion || norm.observacion_sectores || '',
         instituto_registro: 'FONDONORMA',
-        categoria_profesional: 'Auditor Técnico Calificado',
+        categoria_profesional: 'Auditor Calificado',
         calificacion: 'Calificado',
         normas_acreditadas: [],
         sectores_iaf: [],
@@ -24048,16 +24145,23 @@ function bindAuthenticatedEvents(): void {
 
       recordPhase5SessionLog('auditor', newId, 'INSERT', null, {
         nombre: norm.nombre,
+        siglas: norm.siglas,
+        cedula_identidad: norm.cedula_identidad,
       });
 
       void (async () => {
         try {
-          const { error } = await supabase.from('auditor').insert({
-            id: newId,
-            nombre: norm.nombre,
+          const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+            profile: state.profile,
+            draft: norm,
+            existingAuditors: existingSnapshot,
+            newId,
           });
-          if (error) {
-            showFloatingToast(translateDatabaseError(error), 'warning');
+          if (!saveRes.ok) {
+            showFloatingToast(
+              saveRes.error || 'No se pudo guardar el auditor en base de datos.',
+              'warning'
+            );
             render();
           }
         } catch (err) {
@@ -24071,10 +24175,32 @@ function bindAuthenticatedEvents(): void {
     }
 
     if (!audId) return;
-    const prevAud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId);
+    const prevAud = existingSnapshot.find((a) => a.id === audId);
 
     state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
-      a.id === audId ? { ...a, nombre: norm.nombre } : a
+      a.id === audId
+        ? {
+            ...a,
+            nombre: norm.nombre,
+            siglas: norm.siglas,
+            cedula_identidad: norm.cedula_identidad,
+            profesion: norm.profesion,
+            esquemas_complementarios: norm.esquemas_complementarios,
+            anio_actualizacion_normas: norm.anio_actualizacion_normas,
+            sistema_gestion_secundario: norm.sistema_gestion_secundario,
+            ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
+            proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
+            ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
+            proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
+            sin_registro_evaluacion: norm.sin_registro_evaluacion,
+            sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
+            observaciones_evaluacion: norm.observaciones_evaluacion,
+            anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
+            observacion_sectores: norm.observacion_sectores,
+            titulo_profesional: norm.profesion || a.titulo_profesional,
+            codigo_credencial: norm.siglas || a.codigo_credencial,
+          }
+        : a
     );
     state.domainData.auditors = state.domainData.auditors.map((a) =>
       a.id === audId ? { ...a, nombre: norm.nombre } : a
@@ -24093,22 +24219,34 @@ function bindAuthenticatedEvents(): void {
       'auditor',
       audId,
       'UPDATE',
-      prevAud ? { nombre: prevAud.nombre } : null,
-      { nombre: norm.nombre }
+      prevAud
+        ? {
+            nombre: prevAud.nombre,
+            siglas: prevAud.siglas,
+            cedula_identidad: prevAud.cedula_identidad,
+          }
+        : null,
+      {
+        nombre: norm.nombre,
+        siglas: norm.siglas,
+        cedula_identidad: norm.cedula_identidad,
+      }
     );
 
     if (STRICT_UUID_PATTERN.test(audId)) {
       void (async () => {
         try {
-          const { error } = await supabase
-            .from('auditor')
-            .update({
-              nombre: norm.nombre,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', audId);
-          if (error) {
-            showFloatingToast(translateDatabaseError(error), 'warning');
+          const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+            profile: state.profile,
+            auditorId: audId,
+            draft: norm,
+            existingAuditors: existingSnapshot,
+          });
+          if (!saveRes.ok) {
+            showFloatingToast(
+              saveRes.error || 'No se pudo actualizar el auditor en base de datos.',
+              'warning'
+            );
             render();
           }
         } catch (err) {
@@ -31587,14 +31725,18 @@ function generateFallbackAuditEntries(
 }
 
 function buildActorDirectory(): Record<string, ActorDirectoryEntry> {
-  const directory: Record<string, ActorDirectoryEntry> = { ...SEEDED_ACTOR_DIRECTORY };
+  const baseDirectory: Record<string, ActorDirectoryEntry> = { ...SEEDED_ACTOR_DIRECTORY };
   for (const prof of state.approvals.profiles) {
-    const seededEmail = directory[prof.id]?.email || null;
-    directory[prof.id] = {
+    const seededEmail = baseDirectory[prof.id]?.email || null;
+    baseDirectory[prof.id] = {
       nombre: prof.nombre,
       email: seededEmail,
     };
   }
+  const directory = mergeAuditorsIntoActorDirectory(
+    baseDirectory,
+    state.domainData.allAuditorsDetailed
+  );
   if (state.profile && state.user) {
     directory[state.profile.id] = {
       nombre: state.profile.nombre,
@@ -32558,7 +32700,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
       supabase
         .from('auditor')
-        .select('id, nombre, deleted_at, deleted_by, delete_reason')
+        .select('id, nombre, siglas, cedula_identidad, deleted_at, deleted_by, delete_reason')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
@@ -32793,9 +32935,26 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
           code: String(r.numero_certificado || ''),
         };
       }),
-      auditor: buildEntries('auditor', auditorsRes, (r) => ({
-        title: String(r.nombre || 'Auditor Archivado'),
-      })),
+      auditor: buildEntries(
+        'auditor',
+        auditorsRes.error && isMissingTableOrSchemaError(auditorsRes.error)
+          ? await supabase
+              .from('auditor')
+              .select('id, nombre, deleted_at, deleted_by, delete_reason')
+              .not('deleted_at', 'is', null)
+              .order('deleted_at', { ascending: false })
+          : auditorsRes,
+        (r) => {
+          const siglas = r.siglas ? String(r.siglas).trim() : '';
+          const cedula = r.cedula_identidad ? `C.I. ${String(r.cedula_identidad).trim()}` : '';
+          const subtitle = [siglas, cedula].filter(Boolean).join(' · ') || null;
+          return {
+            title: String(r.nombre || 'Auditor Archivado'),
+            subtitle,
+            code: siglas || null,
+          };
+        }
+      ),
       experto_tecnico: buildEntries('experto_tecnico', expertosArchRes, (r) => ({
         title: String(r.nombre || 'Experto Técnico Archivado'),
         subtitle: r.estatus ? String(r.estatus) : null,
@@ -35579,7 +35738,6 @@ async function loadDomainData(): Promise<void> {
 
   try {
     const [
-      auditorsRes,
       gruposRes,
       orgsRes,
       orgVersionsRes,
@@ -35600,26 +35758,6 @@ async function loadDomainData(): Promise<void> {
       acreditacionesRes,
       vinculosRes,
     ] = await Promise.all([
-      supabase
-        .from('auditor')
-        .select(`
-          id,
-          nombre,
-          normas:norma_auditor (
-            id_norma,
-            norma:id_norma ( id, codigo, titulo, norma, esquema )
-          ),
-          sectores:sector_iaf_auditor (
-            id_sector_iaf,
-            sector:id_sector_iaf ( id, sector )
-          ),
-          subsectores:subsector_iaf_auditor (
-            id_subsector_iaf,
-            created_at,
-            subsector:id_subsector_iaf ( id, id_sector_iaf, codigo, descripcion, categoria_riesgo )
-          )
-        `)
-        .is('deleted_at', null),
       (async () => {
         const res = await supabase
           .from('grupo_empresarial')
@@ -35908,132 +36046,7 @@ async function loadDomainData(): Promise<void> {
     ]);
 
     // Audits are hydrated via paginated loadLiveAudits() without obsolete flat date columns
-
-    // Process Auditors (hydrating M:N norma_auditor, sector_iaf_auditor, subsector_iaf_auditor)
-    if (!auditorsRes.error && Array.isArray(auditorsRes.data) && auditorsRes.data.length > 0) {
-      const hydratedAuditorsDetailed: AuditorDetailEntity[] = auditorsRes.data.map(
-        (row: Record<string, unknown>) => {
-          const audId = String(row.id);
-          const audNombre = String(row.nombre || 'Auditor Evaluador');
-          const seedMatch = INITIAL_AUDITORES_DETAILED.find((a) => a.id === audId);
-
-          const normasRaw = Array.isArray(row.normas)
-            ? (row.normas as Array<Record<string, unknown>>)
-            : [];
-          const normaLinks: AuditorNormaLink[] = [];
-          const seenNormaIds = new Set<string>();
-          for (const n of normasRaw) {
-            const inner = (n.norma as Record<string, unknown> | null) || null;
-            const idNorma = String(inner?.id || n.id_norma || '').trim();
-            if (!idNorma || seenNormaIds.has(idNorma)) continue;
-            seenNormaIds.add(idNorma);
-            const normaCodigo = String(inner?.codigo || inner?.norma || 'Norma ISO');
-            normaLinks.push({
-              id_auditor: audId,
-              id_norma: idNorma,
-              norma_codigo: normaCodigo,
-              norma_titulo: inner?.titulo ? String(inner.titulo) : undefined,
-              esquema: inner?.esquema ? String(inner.esquema) : undefined,
-            });
-          }
-          normaLinks.sort((a, b) => a.norma_codigo.localeCompare(b.norma_codigo, 'es'));
-
-          const sectoresRaw = Array.isArray(row.sectores)
-            ? (row.sectores as Array<Record<string, unknown>>)
-            : [];
-          const sectorLinks: AuditorSectorLink[] = [];
-          const seenSectorIds = new Set<string>();
-          for (const s of sectoresRaw) {
-            const inner = (s.sector as Record<string, unknown> | null) || null;
-            const idSector = String(inner?.id || s.id_sector_iaf || '').trim();
-            const secNum = Number(inner?.sector);
-            if (!idSector || !Number.isFinite(secNum) || seenSectorIds.has(idSector)) continue;
-            seenSectorIds.add(idSector);
-            sectorLinks.push({
-              id_auditor: audId,
-              id_sector_iaf: idSector,
-              sector_numero: secNum,
-              sector_descripcion: resolveSectorIafDescription(secNum),
-            });
-          }
-          sectorLinks.sort((a, b) => a.sector_numero - b.sector_numero);
-
-          const subsectoresRaw = Array.isArray(row.subsectores)
-            ? (row.subsectores as Array<Record<string, unknown>>)
-            : [];
-          const subsectorLinks: AuditorSubsectorLink[] = [];
-          const seenSubIds = new Set<string>();
-          for (const subRow of subsectoresRaw) {
-            const inner = (subRow.subsector as Record<string, unknown> | null) || null;
-            const idSub = String(inner?.id || subRow.id_subsector_iaf || '').trim();
-            if (!idSub || seenSubIds.has(idSub)) continue;
-            seenSubIds.add(idSub);
-            const subCodigo = String(inner?.codigo || '—');
-            const idSec = String(inner?.id_sector_iaf || '').trim();
-            const matchedSector = sectorLinks.find((sl) => sl.id_sector_iaf === idSec);
-            const parsedSecNum =
-              matchedSector?.sector_numero ?? (Number(subCodigo.split('.')[0]) || 17);
-            subsectorLinks.push({
-              id_auditor: audId,
-              id_subsector_iaf: idSub,
-              id_sector_iaf: idSec,
-              sector_numero: parsedSecNum,
-              subsector_codigo: subCodigo,
-              subsector_descripcion: String(inner?.descripcion || 'Sub-Sector IAF'),
-              categoria_riesgo: inner?.categoria_riesgo
-                ? String(inner.categoria_riesgo)
-                : undefined,
-              created_at: subRow.created_at ? String(subRow.created_at) : undefined,
-            });
-          }
-          subsectorLinks.sort((a, b) =>
-            a.subsector_codigo.localeCompare(b.subsector_codigo, 'es', { numeric: true })
-          );
-
-          const normasList = normaLinks.map((l) => l.norma_codigo);
-          const iafList = sectorLinks.map((l) => l.sector_numero);
-
-          return {
-            id: audId,
-            nombre: audNombre,
-            titulo_profesional:
-              seedMatch?.titulo_profesional || 'Auditor Técnico Evaluador',
-            codigo_credencial: seedMatch?.codigo_credencial || '',
-            email: seedMatch?.email || '',
-            telefono: seedMatch?.telefono || '',
-            biografia: seedMatch?.biografia || '',
-            instituto_registro: seedMatch?.instituto_registro || 'FONDONORMA',
-            categoria_profesional:
-              seedMatch?.categoria_profesional || 'Auditor Técnico Calificado',
-            calificacion: seedMatch?.calificacion || 'Calificado',
-            normas_acreditadas: normasList,
-            sectores_iaf: iafList,
-            competencias: seedMatch?.competencias || [],
-            normaLinks,
-            sectorLinks,
-            subsectorLinks,
-            historialAuditorias: seedMatch?.historialAuditorias || [],
-          };
-        }
-      );
-
-      const dbAuditorIds = new Set(hydratedAuditorsDetailed.map((a) => a.id));
-      const mergedAuditors = isApprovedStaff()
-        ? [
-            ...hydratedAuditorsDetailed,
-            ...INITIAL_AUDITORES_DETAILED.filter((s) => !dbAuditorIds.has(s.id)),
-          ]
-        : hydratedAuditorsDetailed;
-
-      state.domainData.allAuditorsDetailed = mergedAuditors;
-      state.domainData.auditors = mergedAuditors.map((aud) => ({
-        id: aud.id,
-        nombre: aud.nombre,
-        normas: aud.normas_acreditadas,
-        sectores_iaf: aud.sectores_iaf,
-        rol: aud.categoria_profesional || 'Auditor Técnico Calificado',
-      }));
-    }
+    // Auditors & child tables are hydrated via hydrateAuditoresFromSupabase once catalogs load below
 
     // Process Conglomerados (grupo_empresarial) & link into Organizations
     if (!gruposRes.error && Array.isArray(gruposRes.data) && gruposRes.data.length > 0) {
@@ -36429,6 +36442,37 @@ async function loadDomainData(): Promise<void> {
           (sub) => sub.id_sector_iaf === sec.id || sub.sector_numero === sec.sector
         ).length,
       }));
+    }
+
+    // Hydrate Auditores (auditor + telefono_auditor + email_auditor + evaluacion_in_situ_auditor + M:N)
+    const auditorHydrateRes = await hydrateAuditoresFromSupabase(getAuditorSupabaseClient(), {
+      normas: state.domainData.standards,
+      sectores:
+        state.domainData.iafSectors.length > 0
+          ? state.domainData.iafSectors
+          : INITIAL_SECTORES_IAF,
+      subsectores:
+        state.domainData.iafSubsectors.length > 0
+          ? state.domainData.iafSubsectors
+          : INITIAL_SUBSECTORES_IAF,
+    });
+    if (auditorHydrateRes.ok && auditorHydrateRes.data) {
+      if (auditorHydrateRes.data.length > 0) {
+        state.domainData.allAuditorsDetailed = auditorHydrateRes.data;
+        state.domainData.auditors = auditorHydrateRes.data.map((aud) => ({
+          id: aud.id,
+          nombre: aud.nombre,
+          normas: aud.normas_acreditadas,
+          sectores_iaf: aud.sectores_iaf,
+          rol: aud.categoria_profesional || 'Auditor Calificado',
+        }));
+      } else if (!isApprovedStaff()) {
+        state.domainData.allAuditorsDetailed = [];
+        state.domainData.auditors = [];
+      }
+    } else if (!isApprovedStaff()) {
+      state.domainData.allAuditorsDetailed = [];
+      state.domainData.auditors = [];
     }
 
     // Hydrate Expertos Técnicos (experto_tecnico + 1:N contacto + IAF-only competencies + historial)

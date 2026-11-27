@@ -17,9 +17,124 @@ export type CompetenciaAuditorMode = 'read' | 'add';
 export type CompetenciaTipo = 'norma' | 'sector_iaf' | 'subsector_iaf';
 
 export const AUDITOR_NOMBRE_MAX_LENGTH = 150;
+export const AUDITOR_SIGLAS_MIN_LENGTH = 2;
+export const AUDITOR_SIGLAS_MAX_LENGTH = 12;
+export const AUDITOR_CEDULA_MIN_LENGTH = 5;
+export const AUDITOR_CEDULA_MAX_LENGTH = 30;
+export const AUDITOR_PROFESION_MAX_LENGTH = 200;
+export const AUDITOR_YEAR_MIN = 1990;
+export const AUDITOR_YEAR_MAX = 2100;
+export const AUDITOR_TELEFONO_MAX_LENGTH = 50;
+export const AUDITOR_EMAIL_MAX_LENGTH = 200;
+
+export const AUDITOR_TIPO_TELEFONO_OPTIONS = [
+  'Móvil',
+  'Oficina',
+  'Internacional',
+  'Directo',
+  'Otro',
+] as const;
+
+export const AUDITOR_TIPO_EMAIL_OPTIONS = [
+  'Principal',
+  'Secundario',
+  'Trabajo',
+  'Personal',
+  'Otro',
+] as const;
+
+export interface TelefonoAuditorEntity {
+  id: string;
+  id_auditor: string;
+  telefono: string;
+  tipo_telefono: string;
+  es_principal: boolean;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+export interface EmailAuditorEntity {
+  id: string;
+  id_auditor: string;
+  email: string;
+  tipo_email: string;
+  es_principal: boolean;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+export interface EvaluacionInSituAuditorEntity {
+  id: string;
+  id_auditor: string;
+  etiqueta_periodo?: string | null;
+  norma_referencia?: string | null;
+  sector_area_evaluado?: string | null;
+  ultima_evaluacion_fecha?: string | null;
+  proxima_evaluacion_fecha?: string | null;
+  ultima_evaluacion_texto?: string | null;
+  proxima_evaluacion_texto?: string | null;
+  observaciones?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
+export type AuditorInSituStatus =
+  | 'Vigente'
+  | 'Por Vencer'
+  | 'Vencido'
+  | 'S/R'
+  | 'Pendiente Evaluación'
+  | 'Condicionado';
+
+export interface AuditorSectorObservacionClassification {
+  requiereExpertoTecnico: boolean;
+  sectoresCondicionados: number[];
+  textoAlerta: string;
+}
 
 export interface AuditorFormDraft {
   nombre: string;
+  siglas: string;
+  cedula_identidad: string;
+  profesion: string;
+  esquemas_complementarios: string;
+  anio_actualizacion_normas: number | null;
+  sistema_gestion_secundario: string;
+  ultima_evaluacion_in_situ_texto: string;
+  proxima_evaluacion_in_situ_texto: string;
+  ultima_evaluacion_in_situ_fecha: string | null;
+  proxima_evaluacion_in_situ_fecha: string | null;
+  sin_registro_evaluacion: boolean;
+  sector_area_evaluado_texto: string;
+  observaciones_evaluacion: string;
+  anio_actualizacion_sectores: number | null;
+  observacion_sectores: string;
+}
+
+export interface AuditorTelefonoFormDraft {
+  telefono: string;
+  tipo_telefono: string;
+  es_principal: boolean;
+}
+
+export interface AuditorEmailFormDraft {
+  email: string;
+  tipo_email: string;
+  es_principal: boolean;
+}
+
+export interface EvaluacionInSituFormDraft {
+  etiqueta_periodo: string;
+  norma_referencia: string;
+  sector_area_evaluado: string;
+  ultima_evaluacion_fecha: string | null;
+  proxima_evaluacion_fecha: string | null;
+  ultima_evaluacion_texto: string;
+  proxima_evaluacion_texto: string;
+  observaciones: string;
 }
 
 export interface CompetenciaAuditorFormDraft {
@@ -101,6 +216,24 @@ export interface AuditoriaRealizadaEntity {
 export interface AuditorDetailEntity {
   id: string;
   nombre: string;
+  siglas: string;
+  cedula_identidad: string;
+  profesion: string;
+  esquemas_complementarios: string;
+  anio_actualizacion_normas: number | null;
+  sistema_gestion_secundario: string;
+  ultima_evaluacion_in_situ_texto: string;
+  proxima_evaluacion_in_situ_texto: string;
+  ultima_evaluacion_in_situ_fecha: string | null;
+  proxima_evaluacion_in_situ_fecha: string | null;
+  sin_registro_evaluacion: boolean;
+  sector_area_evaluado_texto: string;
+  observaciones_evaluacion: string;
+  anio_actualizacion_sectores: number | null;
+  observacion_sectores: string;
+  telefonos: TelefonoAuditorEntity[];
+  emails: EmailAuditorEntity[];
+  evaluaciones_in_situ: EvaluacionInSituAuditorEntity[];
   titulo_profesional: string;
   codigo_credencial: string;
   email: string;
@@ -116,6 +249,9 @@ export interface AuditorDetailEntity {
   sectorLinks?: AuditorSectorLink[];
   subsectorLinks?: AuditorSubsectorLink[];
   historialAuditorias: AuditoriaRealizadaEntity[];
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
 }
 
 export type AuditorChildTab = 'competencias' | 'historial';
@@ -460,14 +596,40 @@ export function filterAuditors(
   const cleanQuery = normalizeText(query);
 
   const filtered = auditors.filter((auditor) => {
-    // 1. Text Search across Name, Credential, Email, Biography, Title
+    // 1. Text Search across Name, Siglas, Cédula, Profesión, Credential, Emails, Phones
     if (cleanQuery) {
       const matchName = normalizeText(auditor.nombre).includes(cleanQuery);
+      const matchSiglas = normalizeText(auditor.siglas).includes(cleanQuery);
+      const matchCedula = normalizeText(auditor.cedula_identidad).includes(cleanQuery);
+      const matchProfesion = normalizeText(auditor.profesion).includes(cleanQuery);
+      const matchEsquemas = normalizeText(auditor.esquemas_complementarios).includes(cleanQuery);
+      const matchSgsSec = normalizeText(auditor.sistema_gestion_secundario).includes(cleanQuery);
       const matchTitle = normalizeText(auditor.titulo_profesional).includes(cleanQuery);
       const matchCode = normalizeText(auditor.codigo_credencial).includes(cleanQuery);
-      const matchEmail = normalizeText(auditor.email).includes(cleanQuery);
+      const matchEmail =
+        normalizeText(auditor.email).includes(cleanQuery) ||
+        (auditor.emails || []).some(
+          (em) => !em.deleted_at && normalizeText(em.email).includes(cleanQuery)
+        );
+      const matchPhone =
+        normalizeText(auditor.telefono).includes(cleanQuery) ||
+        (auditor.telefonos || []).some(
+          (tel) => !tel.deleted_at && normalizeText(tel.telefono).includes(cleanQuery)
+        );
       const matchBio = normalizeText(auditor.biografia).includes(cleanQuery);
-      if (!matchName && !matchTitle && !matchCode && !matchEmail && !matchBio) {
+      if (
+        !matchName &&
+        !matchSiglas &&
+        !matchCedula &&
+        !matchProfesion &&
+        !matchEsquemas &&
+        !matchSgsSec &&
+        !matchTitle &&
+        !matchCode &&
+        !matchEmail &&
+        !matchPhone &&
+        !matchBio
+      ) {
         return false;
       }
     }
@@ -526,22 +688,148 @@ export function filterAuditors(
 }
 
 /**
- * Canonical test dataset aligned with database seed in 06_datos_prueba.sql
+ * Canonical fallback dataset aligned with real CSV records in 06_datos_prueba.sql (Paso 1.2)
  */
 export const INITIAL_AUDITORES_DETAILED: AuditorDetailEntity[] = [
   {
     id: '10000000-0000-0000-0000-000000000001',
-    nombre: 'Ing. Carlos Mendoza',
-    titulo_profesional: 'Auditor Líder Certificado — Sistemas de Gestión Calidad y Ambiental',
-    codigo_credencial: 'AUD-REG-2021-05',
-    email: 'cmendoza@programa-aud.com',
-    telefono: '+34 961 882 100',
-    biografia: 'Ingeniero Industrial con más de 18 años de experiencia en auditorías de tercera parte bajo ISO 9001, ISO 14001 y sectores metalmecánicos y de construcción civil de alta complejidad.',
-    instituto_registro: 'Entidad Nacional de Acreditación (ENAC)',
-    categoria_profesional: 'Auditor Líder Senior / Evaluador Jefe',
+    nombre: 'Keyla Cristina Soteldo de Páez',
+    siglas: 'KS',
+    cedula_identidad: '4165827',
+    profesion: 'INGENIERO METALÚRGICO',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2021,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '01/09/2024',
+    proxima_evaluacion_in_situ_texto: '01/09/2027',
+    ultima_evaluacion_in_situ_fecha: '2024-09-01',
+    proxima_evaluacion_in_situ_fecha: '2027-09-01',
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '33 / 33.18',
+    observaciones_evaluacion: '',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: '',
+    telefonos: [
+      {
+        id: '1a100000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        telefono: '04166225576',
+        tipo_telefono: 'Móvil',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1a200000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        email: 'keylasoteldo@gmail.com',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1a300000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        etiqueta_periodo: 'Evaluación Principal',
+        norma_referencia: null,
+        sector_area_evaluado: '33 / 33.18',
+        ultima_evaluacion_fecha: '2024-09-01',
+        proxima_evaluacion_fecha: '2027-09-01',
+        ultima_evaluacion_texto: '01/09/2024',
+        proxima_evaluacion_texto: '01/09/2027',
+        observaciones: null,
+        deleted_at: null,
+      },
+    ],
+    titulo_profesional: 'INGENIERO METALÚRGICO',
+    codigo_credencial: 'KS',
+    email: 'keylasoteldo@gmail.com',
+    telefono: '04166225576',
+    biografia: 'Auditora calificada FONDONORMA bajo ISO 9001:2015, ISO 14001:2015 e ISO 45001:2018.',
+    instituto_registro: 'FONDONORMA',
+    categoria_profesional: 'Auditor Calificado',
     calificacion: 'Calificado',
-    normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015'],
-    sectores_iaf: [17, 28],
+    normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015', 'ISO 45001:2018'],
+    sectores_iaf: [17, 18, 31, 33, 34, 35],
+    normaLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_norma: 'e0000000-0000-0000-0000-000000009001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'Sistemas de Gestión de la Calidad',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_norma: 'e0000000-0000-0000-0000-000000014001',
+        norma_codigo: 'ISO 14001:2015',
+        norma_titulo: 'Sistemas de Gestión Ambiental',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_norma: 'e0000000-0000-0000-0000-000000045001',
+        norma_codigo: 'ISO 45001:2018',
+        norma_titulo: 'Sistemas de Seguridad y Salud Laboral',
+      },
+    ],
+    sectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector_numero: 17,
+        sector_descripcion: 'Metales básicos y productos metálicos elaborados',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000018',
+        sector_numero: 18,
+        sector_descripcion: 'Maquinaria y equipo',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000031',
+        sector_numero: 31,
+        sector_descripcion: 'Transporte, almacenamiento y comunicaciones',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
+        sector_numero: 33,
+        sector_descripcion: 'Tecnología de la información',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000034',
+        sector_numero: 34,
+        sector_descripcion: 'Servicios de ingeniería',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000035',
+        sector_numero: 35,
+        sector_descripcion: 'Otros servicios',
+      },
+    ],
+    subsectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_subsector_iaf: 'da000000-0000-0000-0000-000000000171',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector_numero: 17,
+        subsector_codigo: '17.1',
+        subsector_descripcion: 'Fabricación de metales básicos, fundición y siderurgia',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000001',
+        id_subsector_iaf: 'da000000-0000-0000-0000-000000000331',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
+        sector_numero: 33,
+        subsector_codigo: '33.1',
+        subsector_descripcion: 'Servicios de tecnologías de información',
+      },
+    ],
     competencias: [
       {
         id: 'ca-1001',
@@ -556,311 +844,822 @@ export const INITIAL_AUDITORES_DETAILED: AuditorDetailEntity[] = [
         subsector_iaf_codigo: '17.1',
         subsector_iaf_descripcion: 'Fabricación de metales básicos, fundición y siderurgia',
         rol_calificado: 'Auditor Líder',
-        fecha_calificacion: '2021-03-15',
-        fecha_vencimiento: '2027-03-14',
-        numero_registro: 'ENAC-QMS-171',
-      },
-      {
-        id: 'ca-1002',
-        id_auditor: '10000000-0000-0000-0000-000000000001',
-        id_norma: 'e0000000-0000-0000-0000-000000014001',
-        norma_codigo: 'ISO 14001:2015',
-        norma_titulo: 'Sistemas de Gestión Ambiental',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000028',
-        sector_iaf_numero: 28,
-        sector_iaf_descripcion: 'Construcción e ingeniería civil',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000281',
-        subsector_iaf_codigo: '28.1',
-        subsector_iaf_descripcion: 'Edificación y obras públicas de infraestructura',
-        rol_calificado: 'Auditor Líder',
-        fecha_calificacion: '2021-06-20',
-        fecha_vencimiento: '2027-06-19',
-        numero_registro: 'ENAC-EMS-281',
-      },
-    ],
-    historialAuditorias: [
-      {
-        id: 'ha-101',
-        id_auditor: '10000000-0000-0000-0000-000000000001',
-        codigo_auditoria: 'AUD-2024-001',
-        organizacion_nombre: 'Iberometal Componentes S.A.',
-        numero_certificado: 'FN-QMS-2024-001',
-        norma_codigo: 'ISO 9001:2015',
-        tipo_auditoria: 'Renovación',
-        metodologia: 'Presencial',
-        rol_en_auditoria: 'Auditor Líder',
-        fecha_ejecucion: '2024-11-20',
-        estatus: 'Planificada',
-      },
-      {
-        id: 'ha-102',
-        id_auditor: '10000000-0000-0000-0000-000000000001',
-        codigo_auditoria: 'AUD-2024-002',
-        organizacion_nombre: 'CyberCloud Solutions S.L.',
-        numero_certificado: 'FN-EMS-2024-002',
-        norma_codigo: 'ISO 14001:2015',
-        tipo_auditoria: 'Etapa 1',
-        metodologia: 'Remota',
-        rol_en_auditoria: 'Auditor Líder',
-        fecha_ejecucion: '2024-05-10',
-        estatus: 'Completada',
-      },
-    ],
-  },
-  {
-    id: '10000000-0000-0000-0000-000000000002',
-    nombre: 'Ing. Roberto Silva',
-    titulo_profesional: 'Auditor Líder Senior — Calidad, Seguridad Informática y Metalmecánica',
-    codigo_credencial: 'AUD-REG-2022-88',
-    email: 'rsilva@programa-aud.com',
-    telefono: '+34 600 123 456',
-    biografia: 'Ingeniero Mecánico y Especialista en Seguridad Tecnológica con 15 años liderando auditorías en España y Latinoamérica bajo ISO 9001 e ISO/IEC 27001.',
-    instituto_registro: 'Entidad Nacional de Acreditación (ENAC)',
-    categoria_profesional: 'Auditor Líder / Evaluador Jefe',
-    calificacion: 'Calificado',
-    normas_acreditadas: ['ISO 9001:2015', 'ISO/IEC 27001:2022'],
-    sectores_iaf: [17, 33],
-    competencias: [
-      {
-        id: 'ca-2001',
-        id_auditor: '10000000-0000-0000-0000-000000000002',
-        id_norma: 'e0000000-0000-0000-0000-000000009001',
-        norma_codigo: 'ISO 9001:2015',
-        norma_titulo: 'Sistemas de Gestión de la Calidad',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
-        sector_iaf_numero: 17,
-        sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000171',
-        subsector_iaf_codigo: '17.1',
-        subsector_iaf_descripcion: 'Fabricación de metales básicos, fundición y siderurgia',
-        rol_calificado: 'Auditor Líder',
-        fecha_calificacion: '2022-01-15',
-        fecha_vencimiento: '2028-01-14',
-        numero_registro: 'ENAC-QMS-1702',
-      },
-      {
-        id: 'ca-2002',
-        id_auditor: '10000000-0000-0000-0000-000000000002',
-        id_norma: 'e0000000-0000-0000-0000-000000027001',
-        norma_codigo: 'ISO/IEC 27001:2022',
-        norma_titulo: 'Seguridad de la Información',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
-        sector_iaf_numero: 33,
-        sector_iaf_descripcion: 'Tecnología de la información y comunicaciones',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000331',
-        subsector_iaf_codigo: '33.1',
-        subsector_iaf_descripcion: 'Servicios de TI, centros de datos y cloud computing',
-        rol_calificado: 'Auditor Líder',
-        fecha_calificacion: '2022-05-10',
-        fecha_vencimiento: '2028-05-09',
-        numero_registro: 'ENAC-ISMS-331',
-      },
-    ],
-    historialAuditorias: [
-      {
-        id: 'ha-201',
-        id_auditor: '10000000-0000-0000-0000-000000000002',
-        codigo_auditoria: 'AUD-2024-004',
-        organizacion_nombre: 'CyberCloud Solutions S.L.',
-        numero_certificado: 'FN-ISMS-2024-007',
-        norma_codigo: 'ISO/IEC 27001:2022',
-        tipo_auditoria: 'Etapa 2',
-        metodologia: 'Mixta',
-        rol_en_auditoria: 'Auditor Líder',
-        fecha_ejecucion: '2024-01-15',
-        estatus: 'Cerrada',
-      },
-    ],
-  },
-  {
-    id: '10000000-0000-0000-0000-000000000003',
-    nombre: 'Dra. Ana Belén Torres',
-    titulo_profesional: 'Auditora Especialista — Sector Químico, Farmacéutico y Seguridad Laboral',
-    codigo_credencial: 'AUD-REG-2023-14',
-    email: 'atorres@programa-aud.com',
-    telefono: '+34 913 550 200',
-    biografia: 'Doctora en Ciencias Químicas y Auditora Certificada IRCA. Experta evaluadora técnica en procesos petroquímicos, riesgos mayores y directivas Seveso bajo ISO 45001 e ISO 14001.',
-    instituto_registro: 'IRCA / Chartered Quality Institute (CQI)',
-    categoria_profesional: 'Auditora Senior / Experta Técnica',
-    calificacion: 'Calificado',
-    normas_acreditadas: ['ISO 45001:2018', 'ISO 14001:2015'],
-    sectores_iaf: [14],
-    competencias: [
-      {
-        id: 'ca-3001',
-        id_auditor: '10000000-0000-0000-0000-000000000003',
-        id_norma: 'e0000000-0000-0000-0000-000000045001',
-        norma_codigo: 'ISO 45001:2018',
-        norma_titulo: 'Sistemas de Seguridad y Salud Laboral',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000014',
-        sector_iaf_numero: 14,
-        sector_iaf_descripcion: 'Productos químicos, fibras sintéticas y farmacéuticos',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000141',
-        subsector_iaf_codigo: '14.1',
-        subsector_iaf_descripcion: 'Química básica, fertilizantes y polímeros',
-        rol_calificado: 'Auditor Líder',
-        fecha_calificacion: '2023-02-10',
-        fecha_vencimiento: '2029-02-09',
-        numero_registro: 'IRCA-OHS-141',
-      },
-    ],
-    historialAuditorias: [
-      {
-        id: 'ha-301',
-        id_auditor: '10000000-0000-0000-0000-000000000003',
-        codigo_auditoria: 'AUD-2023-018',
-        organizacion_nombre: 'Petroquímica del Centro C.A.',
-        numero_certificado: 'FN-OHS-2023-018',
-        norma_codigo: 'ISO 45001:2018',
-        tipo_auditoria: 'Seguimiento 1',
-        metodologia: 'Presencial',
-        rol_en_auditoria: 'Auditor Líder',
-        fecha_ejecucion: '2024-04-12',
-        estatus: 'Cerrada',
-      },
-    ],
-  },
-  {
-    id: '10000000-0000-0000-0000-000000000004',
-    nombre: 'Lic. Javier Morales',
-    titulo_profesional: 'Auditor en Formación — Sistemas de Información y Calidad',
-    codigo_credencial: 'AUD-REG-2024-42',
-    email: 'jmorales@programa-aud.com',
-    telefono: '+34 912 345 679',
-    biografia: 'Licenciado en Sistemas de Información con 6 años de experiencia en gestión de calidad de software y seguridad informática. En proceso de calificación para rol de Auditor de Equipo bajo ISO 9001 e ISO 27001.',
-    instituto_registro: 'Entidad Nacional de Acreditación (ENAC)',
-    categoria_profesional: 'Auditor en Entrenamiento',
-    calificacion: 'En Entrenamiento',
-    normas_acreditadas: ['ISO 9001:2015'],
-    sectores_iaf: [33],
-    competencias: [
-      {
-        id: 'ca-4001',
-        id_auditor: '10000000-0000-0000-0000-000000000004',
-        id_norma: 'e0000000-0000-0000-0000-000000009001',
-        norma_codigo: 'ISO 9001:2015',
-        norma_titulo: 'Sistemas de Gestión de la Calidad',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
-        sector_iaf_numero: 33,
-        sector_iaf_descripcion: 'Tecnología de la información y comunicaciones',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000331',
-        subsector_iaf_codigo: '33.1',
-        subsector_iaf_descripcion: 'Servicios de tecnologías de información y desarrollo de software',
-        rol_calificado: 'Auditor Equipo',
-        fecha_calificacion: '2024-03-01',
-        fecha_vencimiento: '2026-02-28',
-        numero_registro: 'ENAC-TRAIN-331',
+        fecha_calificacion: '2024-09-01',
+        fecha_vencimiento: '2027-09-01',
+        numero_registro: 'KS',
       },
     ],
     historialAuditorias: [],
   },
   {
-    id: '10000000-0000-0000-0000-000000000005',
-    nombre: 'Ing. Patricia Salcedo',
-    titulo_profesional: 'Auditora Observadora — Gestión Ambiental y Agroalimentaria',
-    codigo_credencial: 'AUD-REG-2024-99',
-    email: 'psalcedo@programa-aud.com',
-    telefono: '+34 954 112 335',
-    biografia: 'Ingeniera Agrónoma y Especialista Ambiental en fase de inducción y observación en campo para auditorías de sostenibilidad y gestión ambiental.',
-    instituto_registro: 'Entidad Nacional de Acreditación (ENAC)',
-    categoria_profesional: 'Auditora Observadora',
-    calificacion: 'Observador',
-    normas_acreditadas: ['ISO 14001:2015'],
-    sectores_iaf: [14],
-    competencias: [
+    id: '10000000-0000-0000-0000-000000000002',
+    nombre: 'Félix Horacio Rojas Machado',
+    siglas: 'FR',
+    cedula_identidad: '2995963',
+    profesion: 'INGENIERO QUÍMICO',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2020,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: 'may-15 / nov-24',
+    proxima_evaluacion_in_situ_texto: 'may-18 / nov-27',
+    ultima_evaluacion_in_situ_fecha: '2024-11-01',
+    proxima_evaluacion_in_situ_fecha: '2027-11-01',
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '4',
+    observaciones_evaluacion: '',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: '',
+    telefonos: [
       {
-        id: 'ca-5001',
-        id_auditor: '10000000-0000-0000-0000-000000000005',
+        id: '1a100000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        telefono: '52 81 3056 1157',
+        tipo_telefono: 'Internacional',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1a200000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        email: 'frojas301@gmail.com',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1a300000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        etiqueta_periodo: 'Evaluación 1 (may-15)',
+        norma_referencia: null,
+        sector_area_evaluado: '4',
+        ultima_evaluacion_fecha: '2015-05-01',
+        proxima_evaluacion_fecha: '2018-05-01',
+        ultima_evaluacion_texto: 'may-15',
+        proxima_evaluacion_texto: 'may-18',
+        observaciones: null,
+        deleted_at: null,
+      },
+      {
+        id: '1a300000-0000-0000-0000-000000000003',
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        etiqueta_periodo: 'Evaluación 2 (nov-24)',
+        norma_referencia: null,
+        sector_area_evaluado: '4',
+        ultima_evaluacion_fecha: '2024-11-01',
+        proxima_evaluacion_fecha: '2027-11-01',
+        ultima_evaluacion_texto: 'nov-24',
+        proxima_evaluacion_texto: 'nov-27',
+        observaciones: null,
+        deleted_at: null,
+      },
+    ],
+    titulo_profesional: 'INGENIERO QUÍMICO',
+    codigo_credencial: 'FR',
+    email: 'frojas301@gmail.com',
+    telefono: '52 81 3056 1157',
+    biografia: 'Auditor calificado FONDONORMA en gestión de la calidad e industria química.',
+    instituto_registro: 'FONDONORMA',
+    categoria_profesional: 'Auditor Calificado',
+    calificacion: 'Calificado',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [2, 4, 10, 12, 14, 16, 26, 34],
+    normaLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        id_norma: 'e0000000-0000-0000-0000-000000009001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'Sistemas de Gestión de la Calidad',
+      },
+    ],
+    sectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000002',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000014',
+        sector_numero: 14,
+        sector_descripcion: 'Productos químicos, fibras sintéticas y farmacéuticos',
+      },
+    ],
+    subsectorLinks: [],
+    competencias: [],
+    historialAuditorias: [],
+  },
+  {
+    id: '10000000-0000-0000-0000-000000000003',
+    nombre: 'José Ramón Polo Faría',
+    siglas: 'JRP',
+    cedula_identidad: '5684384',
+    profesion: 'INGENIERO INDUSTRIAL',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2020,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '01/11/2023',
+    proxima_evaluacion_in_situ_texto: '01/11/2026',
+    ultima_evaluacion_in_situ_fecha: '2023-11-01',
+    proxima_evaluacion_in_situ_fecha: '2026-11-01',
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '34 / 34.1',
+    observaciones_evaluacion: 'SECTOR 9 Y 38 CON EXPERTO TÉCNICO',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: 'Sector 9 y 38 con Experto tecnico.',
+    telefonos: [
+      {
+        id: '1a100000-0000-0000-0000-000000000003',
+        id_auditor: '10000000-0000-0000-0000-000000000003',
+        telefono: '02129074632',
+        tipo_telefono: 'Oficina',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1a200000-0000-0000-0000-000000000003',
+        id_auditor: '10000000-0000-0000-0000-000000000003',
+        email: 'joserpolofaria@gmail.com',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1a300000-0000-0000-0000-000000000004',
+        id_auditor: '10000000-0000-0000-0000-000000000003',
+        etiqueta_periodo: 'Evaluación Principal',
+        norma_referencia: null,
+        sector_area_evaluado: '34 / 34.1',
+        ultima_evaluacion_fecha: '2023-11-01',
+        proxima_evaluacion_fecha: '2026-11-01',
+        ultima_evaluacion_texto: '01/11/2023',
+        proxima_evaluacion_texto: '01/11/2026',
+        observaciones: 'SECTOR 9 Y 38 CON EXPERTO TÉCNICO',
+        deleted_at: null,
+      },
+    ],
+    titulo_profesional: 'INGENIERO INDUSTRIAL',
+    codigo_credencial: 'JRP',
+    email: 'joserpolofaria@gmail.com',
+    telefono: '02129074632',
+    biografia: 'Auditor calificado FONDONORMA con cobertura en sectores industriales y de servicios.',
+    instituto_registro: 'FONDONORMA',
+    categoria_profesional: 'Auditor Calificado',
+    calificacion: 'Calificado',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [9, 29, 30, 31, 32, 34, 35, 38],
+    normaLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000003',
+        id_norma: 'e0000000-0000-0000-0000-000000009001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'Sistemas de Gestión de la Calidad',
+      },
+    ],
+    sectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000003',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000034',
+        sector_numero: 34,
+        sector_descripcion: 'Servicios de ingeniería',
+      },
+    ],
+    subsectorLinks: [],
+    competencias: [],
+    historialAuditorias: [],
+  },
+  {
+    id: '10000000-0000-0000-0000-000000000004',
+    nombre: 'Leonardo Antonio Rojas Gómez',
+    siglas: 'LR',
+    cedula_identidad: '5365320',
+    profesion: 'INGENIERO QUÍMICO',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2021,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '01/08/2021',
+    proxima_evaluacion_in_situ_texto: '01/08/2024',
+    ultima_evaluacion_in_situ_fecha: '2021-08-01',
+    proxima_evaluacion_in_situ_fecha: '2024-08-01',
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '3 / 3.1',
+    observaciones_evaluacion: '',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: '',
+    telefonos: [
+      {
+        id: '1a100000-0000-0000-0000-000000000004',
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        telefono: '04144222939',
+        tipo_telefono: 'Móvil',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1a200000-0000-0000-0000-000000000004',
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        email: 'leorojas48@gmail.com',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1a300000-0000-0000-0000-000000000005',
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        etiqueta_periodo: 'Evaluación Principal',
+        norma_referencia: null,
+        sector_area_evaluado: '3 / 3.1',
+        ultima_evaluacion_fecha: '2021-08-01',
+        proxima_evaluacion_fecha: '2024-08-01',
+        ultima_evaluacion_texto: '01/08/2021',
+        proxima_evaluacion_texto: '01/08/2024',
+        observaciones: null,
+        deleted_at: null,
+      },
+    ],
+    titulo_profesional: 'INGENIERO QUÍMICO',
+    codigo_credencial: 'LR',
+    email: 'leorojas48@gmail.com',
+    telefono: '04144222939',
+    biografia: 'Auditor integrado bajo ISO 9001, ISO 14001 e ISO 45001.',
+    instituto_registro: 'FONDONORMA',
+    categoria_profesional: 'Auditor Calificado',
+    calificacion: 'Calificado',
+    normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015', 'ISO 45001:2018'],
+    sectores_iaf: [3, 10, 12, 14, 16, 26, 31, 34],
+    normaLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        id_norma: 'e0000000-0000-0000-0000-000000009001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'Sistemas de Gestión de la Calidad',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000004',
         id_norma: 'e0000000-0000-0000-0000-000000014001',
         norma_codigo: 'ISO 14001:2015',
         norma_titulo: 'Sistemas de Gestión Ambiental',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000014',
-        sector_iaf_numero: 14,
-        sector_iaf_descripcion: 'Productos químicos, fibras sintéticas y farmacéuticos',
-        rol_calificado: 'Experto Técnico',
-        fecha_calificacion: '2024-05-15',
-        fecha_vencimiento: '2025-05-14',
-        numero_registro: 'ENAC-OBS-14',
+      },
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        id_norma: 'e0000000-0000-0000-0000-000000045001',
+        norma_codigo: 'ISO 45001:2018',
+        norma_titulo: 'Sistemas de Seguridad y Salud Laboral',
       },
     ],
+    sectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000004',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000014',
+        sector_numero: 14,
+        sector_descripcion: 'Productos químicos, fibras sintéticas y farmacéuticos',
+      },
+    ],
+    subsectorLinks: [],
+    competencias: [],
+    historialAuditorias: [],
+  },
+  {
+    id: '10000000-0000-0000-0000-000000000005',
+    nombre: 'Nordy Armando Fuentes',
+    siglas: 'NF',
+    cedula_identidad: '5884819',
+    profesion: 'INGENIERO INDUSTRIAL',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2023,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '01/08/2022',
+    proxima_evaluacion_in_situ_texto: '01/08/2025',
+    ultima_evaluacion_in_situ_fecha: '2022-08-01',
+    proxima_evaluacion_in_situ_fecha: '2025-08-01',
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '7 / 7.1',
+    observaciones_evaluacion: 'SECTOR 4, 5 Y 38  CON EXP TÉCNICO',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: 'SECTOR 4, 5 y 38  CON EXP TECNICO',
+    telefonos: [
+      {
+        id: '1a100000-0000-0000-0000-000000000005',
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        telefono: '04126018407',
+        tipo_telefono: 'Móvil',
+        es_principal: true,
+        deleted_at: null,
+      },
+      {
+        id: '1a100000-0000-0000-0000-000000000006',
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        telefono: '02123698762',
+        tipo_telefono: 'Oficina',
+        es_principal: false,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1a200000-0000-0000-0000-000000000005',
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        email: 'nordyfuentes@gmail.com',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1a300000-0000-0000-0000-000000000006',
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        etiqueta_periodo: 'Evaluación Principal',
+        norma_referencia: null,
+        sector_area_evaluado: '7 / 7.1',
+        ultima_evaluacion_fecha: '2022-08-01',
+        proxima_evaluacion_fecha: '2025-08-01',
+        ultima_evaluacion_texto: '01/08/2022',
+        proxima_evaluacion_texto: '01/08/2025',
+        observaciones: 'SECTOR 4, 5 Y 38  CON EXP TÉCNICO',
+        deleted_at: null,
+      },
+    ],
+    titulo_profesional: 'INGENIERO INDUSTRIAL',
+    codigo_credencial: 'NF',
+    email: 'nordyfuentes@gmail.com',
+    telefono: '04126018407',
+    biografia: 'Auditor calificado FONDONORMA para sectores manufactureros y de servicios.',
+    instituto_registro: 'FONDONORMA',
+    categoria_profesional: 'Auditor Calificado',
+    calificacion: 'Calificado',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [4, 5, 6, 7, 29, 31, 34, 38],
+    normaLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        id_norma: 'e0000000-0000-0000-0000-000000009001',
+        norma_codigo: 'ISO 9001:2015',
+        norma_titulo: 'Sistemas de Gestión de la Calidad',
+      },
+    ],
+    sectorLinks: [
+      {
+        id_auditor: '10000000-0000-0000-0000-000000000005',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000007',
+        sector_numero: 7,
+        sector_descripcion: 'Papel y productos de papel',
+      },
+    ],
+    subsectorLinks: [],
+    competencias: [],
     historialAuditorias: [],
   },
   {
     id: '33333333-3333-3333-3333-333333333333',
     nombre: 'Auditor Técnico Evaluador',
-    titulo_profesional: 'Auditor de Equipo Certificado — Calidad y Manufactura Metalmecánica',
+    siglas: 'TEST',
+    cedula_identidad: '',
+    profesion: 'Auditor Técnico de Plataforma',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: 2024,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '',
+    proxima_evaluacion_in_situ_texto: '',
+    ultima_evaluacion_in_situ_fecha: null,
+    proxima_evaluacion_in_situ_fecha: null,
+    sin_registro_evaluacion: true,
+    sector_area_evaluado_texto: '',
+    observaciones_evaluacion: 'Cuenta de pruebas RBAC',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: '',
+    telefonos: [],
+    emails: [
+      {
+        id: '33333333-3333-3333-3333-333333333331',
+        id_auditor: '33333333-3333-3333-3333-333333333333',
+        email: 'auditor@fondonorma.test',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [],
+    titulo_profesional: 'Auditor Técnico de Plataforma',
     codigo_credencial: 'AUD-REG-2023-33',
     email: 'auditor@fondonorma.test',
-    telefono: '+34 961 882 333',
-    biografia: 'Auditor de tercera parte habilitado para evaluaciones ISO 9001:2015 en el sector metalmecánico e industrial.',
-    instituto_registro: 'Entidad Nacional de Acreditación (ENAC)',
+    telefono: '',
+    biografia: 'Auditor de tercera parte habilitado para evaluaciones ISO en plataforma.',
+    instituto_registro: 'FONDONORMA',
     categoria_profesional: 'Auditor de Equipo',
     calificacion: 'Calificado',
-    normas_acreditadas: ['ISO 9001:2015'],
-    sectores_iaf: [17],
-    competencias: [
+    normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015', 'ISO 45001:2018', 'ISO/IEC 27001:2022', 'ISO 22000:2018'],
+    sectores_iaf: [3, 17, 33],
+    normaLinks: [
       {
-        id: 'ca-3301',
         id_auditor: '33333333-3333-3333-3333-333333333333',
         id_norma: 'e0000000-0000-0000-0000-000000009001',
         norma_codigo: 'ISO 9001:2015',
         norma_titulo: 'Sistemas de Gestión de la Calidad',
-        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
-        sector_iaf_numero: 17,
-        sector_iaf_descripcion: 'Metales básicos y productos metálicos elaborados',
-        id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
-        subsector_iaf_codigo: '17.2',
-        subsector_iaf_descripcion: 'Fabricación de productos metálicos elaborados y estampado',
-        rol_calificado: 'Auditor Equipo',
-        fecha_calificacion: '2023-02-01',
-        fecha_vencimiento: '2027-01-31',
-        numero_registro: 'ENAC-QMS-172',
       },
-    ],
-    historialAuditorias: [
       {
-        id: 'ha-3301',
         id_auditor: '33333333-3333-3333-3333-333333333333',
-        codigo_auditoria: 'AUD-2024-001',
-        organizacion_nombre: 'Iberometal Componentes S.A.',
-        numero_certificado: 'FN-QMS-2024-001',
-        norma_codigo: 'ISO 9001:2015',
-        tipo_auditoria: 'Renovación',
-        metodologia: 'Presencial',
-        rol_en_auditoria: 'Auditor de Equipo',
-        fecha_ejecucion: '2024-11-20',
-        estatus: 'Planificada',
+        id_norma: 'e0000000-0000-0000-0000-000000027001',
+        norma_codigo: 'ISO/IEC 27001:2022',
+        norma_titulo: 'Seguridad de la Información',
       },
     ],
+    sectorLinks: [
+      {
+        id_auditor: '33333333-3333-3333-3333-333333333333',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector_numero: 17,
+        sector_descripcion: 'Metales básicos y productos metálicos elaborados',
+      },
+      {
+        id_auditor: '33333333-3333-3333-3333-333333333333',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000033',
+        sector_numero: 33,
+        sector_descripcion: 'Tecnología de la información',
+      },
+    ],
+    subsectorLinks: [
+      {
+        id_auditor: '33333333-3333-3333-3333-333333333333',
+        id_subsector_iaf: 'da000000-0000-0000-0000-000000000172',
+        id_sector_iaf: 'd0000000-0000-0000-0000-000000000017',
+        sector_numero: 17,
+        subsector_codigo: '17.2',
+        subsector_descripcion: 'Fabricación de productos metálicos elaborados y estampado',
+      },
+    ],
+    competencias: [],
+    historialAuditorias: [],
   },
 ];
+
+export function getPrimaryAuditorTelefono(
+  telefonos: ReadonlyArray<TelefonoAuditorEntity> | undefined
+): string {
+  if (!Array.isArray(telefonos)) return '';
+  const active = telefonos.filter((t) => !t.deleted_at && Boolean(t.telefono?.trim()));
+  if (active.length === 0) return '';
+  const primary = active.find((t) => t.es_principal);
+  return (primary || active[0]).telefono.trim();
+}
+
+export function getPrimaryAuditorEmail(
+  emails: ReadonlyArray<EmailAuditorEntity> | undefined
+): string {
+  if (!Array.isArray(emails)) return '';
+  const active = emails.filter((e) => !e.deleted_at && Boolean(e.email?.trim()));
+  if (active.length === 0) return '';
+  const primary = active.find((e) => e.es_principal);
+  return (primary || active[0]).email.trim();
+}
+
+export function summarizeEvaluacionesInSitu(
+  evaluaciones: ReadonlyArray<EvaluacionInSituAuditorEntity> | undefined
+): {
+  ultima_evaluacion_in_situ_fecha: string | null;
+  proxima_evaluacion_in_situ_fecha: string | null;
+  sin_registro_evaluacion: boolean;
+} {
+  const active = Array.isArray(evaluaciones)
+    ? evaluaciones.filter((ev) => !ev.deleted_at)
+    : [];
+  let maxUltima: string | null = null;
+  let maxProxima: string | null = null;
+
+  for (const ev of active) {
+    const ult = (ev.ultima_evaluacion_fecha || '').trim().slice(0, 10);
+    if (ult && /^\d{4}-\d{2}-\d{2}$/.test(ult)) {
+      if (!maxUltima || ult > maxUltima) {
+        maxUltima = ult;
+      }
+    }
+    const prox = (ev.proxima_evaluacion_fecha || '').trim().slice(0, 10);
+    if (prox && /^\d{4}-\d{2}-\d{2}$/.test(prox)) {
+      if (!maxProxima || prox > maxProxima) {
+        maxProxima = prox;
+      }
+    }
+  }
+
+  return {
+    ultima_evaluacion_in_situ_fecha: maxUltima,
+    proxima_evaluacion_in_situ_fecha: maxProxima,
+    sin_registro_evaluacion: maxUltima === null,
+  };
+}
+
+export function evaluateAuditorInSituStatus(
+  auditor: Pick<
+    AuditorDetailEntity,
+    | 'sin_registro_evaluacion'
+    | 'proxima_evaluacion_in_situ_fecha'
+    | 'observaciones_evaluacion'
+    | 'observacion_sectores'
+  >,
+  referenceDate?: string | Date
+): AuditorInSituStatus {
+  const combinedObs = normalizeText(
+    `${auditor.observaciones_evaluacion || ''} ${auditor.observacion_sectores || ''}`
+  ).toUpperCase();
+
+  if (
+    combinedObs.includes('PENDIENTE') ||
+    combinedObs.includes('FALTA EVALUACION')
+  ) {
+    return 'Pendiente Evaluación';
+  }
+
+  if (combinedObs.includes('CONDICIONA')) {
+    return 'Condicionado';
+  }
+
+  if (auditor.sin_registro_evaluacion || !auditor.proxima_evaluacion_in_situ_fecha) {
+    return 'S/R';
+  }
+
+  const nextEvalMs = parseDateUtc(auditor.proxima_evaluacion_in_situ_fecha);
+  if (Number.isNaN(nextEvalMs)) {
+    return 'S/R';
+  }
+
+  const refIso =
+    referenceDate instanceof Date
+      ? referenceDate.toISOString().slice(0, 10)
+      : typeof referenceDate === 'string' && referenceDate.trim()
+      ? referenceDate.trim().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+  const refMs = parseDateUtc(refIso);
+
+  if (nextEvalMs < refMs) {
+    return 'Vencido';
+  }
+
+  const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
+  if (nextEvalMs - refMs <= ninetyDaysMs) {
+    return 'Por Vencer';
+  }
+
+  return 'Vigente';
+}
+
+export function getAuditorInSituStatusVisual(status: AuditorInSituStatus): {
+  label: AuditorInSituStatus;
+  badgeClass: string;
+  dotClass: string;
+} {
+  switch (status) {
+    case 'Vigente':
+      return {
+        label: 'Vigente',
+        badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+        dotClass: 'bg-emerald-500',
+      };
+    case 'Por Vencer':
+      return {
+        label: 'Por Vencer',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+        dotClass: 'bg-amber-500',
+      };
+    case 'Vencido':
+      return {
+        label: 'Vencido',
+        badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+        dotClass: 'bg-rose-500',
+      };
+    case 'Pendiente Evaluación':
+      return {
+        label: 'Pendiente Evaluación',
+        badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
+        dotClass: 'bg-sky-500',
+      };
+    case 'Condicionado':
+      return {
+        label: 'Condicionado',
+        badgeClass: 'bg-orange-50 text-orange-800 border-orange-200',
+        dotClass: 'bg-orange-500',
+      };
+    case 'S/R':
+    default:
+      return {
+        label: 'S/R',
+        badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+        dotClass: 'bg-slate-400',
+      };
+  }
+}
+
+export function classifyAuditorObservacionSector(
+  auditor: Pick<AuditorDetailEntity, 'observacion_sectores' | 'observaciones_evaluacion'>
+): AuditorSectorObservacionClassification {
+  const sectorObsRaw = (auditor.observacion_sectores || '').trim();
+  const evalObsRaw = (auditor.observaciones_evaluacion || '').trim();
+  const textoAlerta = sectorObsRaw || evalObsRaw;
+
+  const normalizedSectorObs = normalizeText(sectorObsRaw).toUpperCase();
+  const normalizedEvalObs = normalizeText(evalObsRaw).toUpperCase();
+  const combinedNorm = `${normalizedSectorObs} ${normalizedEvalObs}`.trim();
+
+  const requiereExpertoTecnico =
+    combinedNorm.includes('EXPERTO') ||
+    combinedNorm.includes('EXP TEC') ||
+    combinedNorm.includes('EXP. TEC');
+
+  if (!requiereExpertoTecnico) {
+    return {
+      requiereExpertoTecnico: false,
+      sectoresCondicionados: [],
+      textoAlerta,
+    };
+  }
+
+  const scanSource = normalizedSectorObs.includes('EXP') ? sectorObsRaw : evalObsRaw || sectorObsRaw;
+  const sectorNumbers = new Set<number>();
+  const matches = scanSource.match(/\b\d{1,4}\b/g) || [];
+  for (const token of matches) {
+    const num = Number(token);
+    if (!Number.isInteger(num)) continue;
+    if (num >= 1 && num <= 39) {
+      sectorNumbers.add(num);
+    }
+  }
+
+  return {
+    requiereExpertoTecnico: true,
+    sectoresCondicionados: Array.from(sectorNumbers).sort((a, b) => a - b),
+    textoAlerta,
+  };
+}
 
 export function createEmptyAuditorFormDraft(): AuditorFormDraft {
   return {
     nombre: '',
+    siglas: '',
+    cedula_identidad: '',
+    profesion: '',
+    esquemas_complementarios: '',
+    anio_actualizacion_normas: null,
+    sistema_gestion_secundario: '',
+    ultima_evaluacion_in_situ_texto: '',
+    proxima_evaluacion_in_situ_texto: '',
+    ultima_evaluacion_in_situ_fecha: null,
+    proxima_evaluacion_in_situ_fecha: null,
+    sin_registro_evaluacion: false,
+    sector_area_evaluado_texto: '',
+    observaciones_evaluacion: '',
+    anio_actualizacion_sectores: null,
+    observacion_sectores: '',
   };
 }
 
 export function createAuditorDraftFromEntity(
-  auditor: Pick<AuditorDetailEntity, 'nombre'>
+  auditor: Pick<AuditorDetailEntity, 'nombre'> & Partial<AuditorDetailEntity>
 ): AuditorFormDraft {
   return {
     nombre: auditor.nombre || '',
+    siglas: auditor.siglas || auditor.codigo_credencial || '',
+    cedula_identidad: auditor.cedula_identidad || '',
+    profesion: auditor.profesion || auditor.titulo_profesional || '',
+    esquemas_complementarios: auditor.esquemas_complementarios || '',
+    anio_actualizacion_normas: auditor.anio_actualizacion_normas ?? null,
+    sistema_gestion_secundario: auditor.sistema_gestion_secundario || '',
+    ultima_evaluacion_in_situ_texto: auditor.ultima_evaluacion_in_situ_texto || '',
+    proxima_evaluacion_in_situ_texto: auditor.proxima_evaluacion_in_situ_texto || '',
+    ultima_evaluacion_in_situ_fecha: auditor.ultima_evaluacion_in_situ_fecha ?? null,
+    proxima_evaluacion_in_situ_fecha: auditor.proxima_evaluacion_in_situ_fecha ?? null,
+    sin_registro_evaluacion: Boolean(auditor.sin_registro_evaluacion),
+    sector_area_evaluado_texto: auditor.sector_area_evaluado_texto || '',
+    observaciones_evaluacion: auditor.observaciones_evaluacion || '',
+    anio_actualizacion_sectores: auditor.anio_actualizacion_sectores ?? null,
+    observacion_sectores: auditor.observacion_sectores || '',
   };
 }
 
+export function createEmptyAuditorTelefonoDraft(): AuditorTelefonoFormDraft {
+  return {
+    telefono: '',
+    tipo_telefono: 'Móvil',
+    es_principal: false,
+  };
+}
+
+export function createEmptyAuditorEmailDraft(): AuditorEmailFormDraft {
+  return {
+    email: '',
+    tipo_email: 'Principal',
+    es_principal: false,
+  };
+}
+
+export function createEmptyEvaluacionInSituDraft(): EvaluacionInSituFormDraft {
+  return {
+    etiqueta_periodo: '',
+    norma_referencia: '',
+    sector_area_evaluado: '',
+    ultima_evaluacion_fecha: null,
+    proxima_evaluacion_fecha: null,
+    ultima_evaluacion_texto: '',
+    proxima_evaluacion_texto: '',
+    observaciones: '',
+  };
+}
+
+function normalizeOptionalYear(
+  raw: number | string | null | undefined,
+  label: string
+): { ok: true; value: number | null } | { ok: false; message: string } {
+  if (raw === null || raw === undefined || raw === '') {
+    return { ok: true, value: null };
+  }
+  const parsed = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isInteger(parsed) || parsed < AUDITOR_YEAR_MIN || parsed > AUDITOR_YEAR_MAX) {
+    return {
+      ok: false,
+      message: `${label} debe ser un año válido entre ${AUDITOR_YEAR_MIN} y ${AUDITOR_YEAR_MAX}.`,
+    };
+  }
+  return { ok: true, value: parsed };
+}
+
+function normalizeOptionalIsoDate(
+  raw: string | null | undefined
+): { ok: true; value: string | null } | { ok: false; message: string } {
+  const clean = (raw || '').trim();
+  if (!clean) return { ok: true, value: null };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    return {
+      ok: false,
+      message: 'Las fechas de evaluación in situ deben tener formato válido AAAA-MM-DD.',
+    };
+  }
+  const time = parseDateUtc(clean);
+  if (Number.isNaN(time)) {
+    return { ok: false, message: 'La fecha de evaluación in situ ingresada no es válida.' };
+  }
+  return { ok: true, value: clean };
+}
+
 export function validateAuditorDraft(
-  draft: AuditorFormDraft,
-  existingAuditors: ReadonlyArray<{ id: string; nombre: string }>,
+  draft: Partial<AuditorFormDraft> & { nombre: string },
+  existingAuditors: ReadonlyArray<{
+    id: string;
+    nombre: string;
+    cedula_identidad?: string | null;
+    deleted_at?: string | null;
+  }>,
   excludeId?: string
 ): { valid: boolean; message?: string; normalized: AuditorFormDraft } {
   const nombre = (draft.nombre || '').trim().replace(/\s+/g, ' ');
-  const normalized: AuditorFormDraft = { nombre };
+  const siglas = (draft.siglas || '').trim().toUpperCase();
+  const cedula = (draft.cedula_identidad || '').trim().replace(/\s+/g, '').toUpperCase();
+  const profesion = (draft.profesion || '').trim().replace(/\s+/g, ' ');
+  const esquemas_complementarios = (draft.esquemas_complementarios || '').trim();
+  const sistema_gestion_secundario = (draft.sistema_gestion_secundario || '').trim();
+  const ultima_evaluacion_in_situ_texto = (draft.ultima_evaluacion_in_situ_texto || '').trim();
+  const proxima_evaluacion_in_situ_texto = (draft.proxima_evaluacion_in_situ_texto || '').trim();
+  const sector_area_evaluado_texto = (draft.sector_area_evaluado_texto || '').trim();
+  const observaciones_evaluacion = (draft.observaciones_evaluacion || '').trim();
+  const observacion_sectores = (draft.observacion_sectores || '').trim();
 
-  if (nombre.length < 2) {
+  const anioNormasCheck = normalizeOptionalYear(
+    draft.anio_actualizacion_normas,
+    'El año de actualización de normas'
+  );
+  const anioSectoresCheck = normalizeOptionalYear(
+    draft.anio_actualizacion_sectores,
+    'El año de actualización de sectores'
+  );
+  const ultFechaCheck = normalizeOptionalIsoDate(draft.ultima_evaluacion_in_situ_fecha);
+  const proxFechaCheck = normalizeOptionalIsoDate(draft.proxima_evaluacion_in_situ_fecha);
+
+  const normalized: AuditorFormDraft = {
+    nombre,
+    siglas,
+    cedula_identidad: cedula,
+    profesion,
+    esquemas_complementarios,
+    anio_actualizacion_normas: anioNormasCheck.ok ? anioNormasCheck.value : null,
+    sistema_gestion_secundario,
+    ultima_evaluacion_in_situ_texto,
+    proxima_evaluacion_in_situ_texto,
+    ultima_evaluacion_in_situ_fecha: ultFechaCheck.ok ? ultFechaCheck.value : null,
+    proxima_evaluacion_in_situ_fecha: proxFechaCheck.ok ? proxFechaCheck.value : null,
+    sin_registro_evaluacion: Boolean(draft.sin_registro_evaluacion),
+    sector_area_evaluado_texto,
+    observaciones_evaluacion,
+    anio_actualizacion_sectores: anioSectoresCheck.ok ? anioSectoresCheck.value : null,
+    observacion_sectores,
+  };
+
+  if (nombre.length < 3) {
     return {
       valid: false,
-      message: 'El nombre completo del auditor debe tener al menos 2 caracteres.',
+      message: 'El nombre completo del auditor debe tener al menos 3 caracteres.',
       normalized,
     };
   }
@@ -873,13 +1672,195 @@ export function validateAuditorDraft(
     };
   }
 
-  const duplicate = existingAuditors.some(
-    (a) => a.id !== excludeId && normalizeText(a.nombre) === normalizeText(nombre)
-  );
-  if (duplicate) {
+  if (!/^[A-Z0-9]{2,12}$/.test(siglas)) {
     return {
       valid: false,
-      message: `Ya existe un auditor registrado con el nombre "${nombre}".`,
+      message: `Las siglas del auditor deben tener entre ${AUDITOR_SIGLAS_MIN_LENGTH} y ${AUDITOR_SIGLAS_MAX_LENGTH} caracteres alfanuméricos.`,
+      normalized,
+    };
+  }
+
+  if (!excludeId && !cedula) {
+    return {
+      valid: false,
+      message: 'La cédula de identidad es obligatoria para registrar un nuevo auditor.',
+      normalized,
+    };
+  }
+
+  if (cedula) {
+    if (
+      cedula.length < AUDITOR_CEDULA_MIN_LENGTH ||
+      cedula.length > AUDITOR_CEDULA_MAX_LENGTH ||
+      !/^[A-Z0-9.-]+$/.test(cedula)
+    ) {
+      return {
+        valid: false,
+        message: `La cédula de identidad debe tener entre ${AUDITOR_CEDULA_MIN_LENGTH} y ${AUDITOR_CEDULA_MAX_LENGTH} caracteres alfanuméricos válidos.`,
+        normalized,
+      };
+    }
+
+    const duplicateCedula = existingAuditors.some(
+      (a) =>
+        !a.deleted_at &&
+        a.id !== excludeId &&
+        Boolean(a.cedula_identidad?.trim()) &&
+        a.cedula_identidad!.trim().replace(/\s+/g, '').toUpperCase() === cedula
+    );
+    if (duplicateCedula) {
+      return {
+        valid: false,
+        message: 'Ya existe un auditor activo con esa cédula de identidad.',
+        normalized,
+      };
+    }
+  }
+
+  if (profesion.length > AUDITOR_PROFESION_MAX_LENGTH) {
+    return {
+      valid: false,
+      message: `La profesión no puede superar los ${AUDITOR_PROFESION_MAX_LENGTH} caracteres.`,
+      normalized,
+    };
+  }
+
+  if (!anioNormasCheck.ok) {
+    return { valid: false, message: anioNormasCheck.message, normalized };
+  }
+
+  if (!anioSectoresCheck.ok) {
+    return { valid: false, message: anioSectoresCheck.message, normalized };
+  }
+
+  if (!ultFechaCheck.ok) {
+    return { valid: false, message: ultFechaCheck.message, normalized };
+  }
+
+  if (!proxFechaCheck.ok) {
+    return { valid: false, message: proxFechaCheck.message, normalized };
+  }
+
+  return { valid: true, normalized };
+}
+
+const AUDITOR_PHONE_FORMAT_REGEX = /^[+\d()\s.-]{6,50}$/;
+const AUDITOR_EMAIL_FORMAT_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
+
+export function validateAuditorTelefonoDraft(
+  draft: AuditorTelefonoFormDraft,
+  existingTelefonos: ReadonlyArray<Pick<TelefonoAuditorEntity, 'telefono' | 'deleted_at'>> = []
+): { valid: boolean; message?: string; normalized: AuditorTelefonoFormDraft } {
+  const telefono = (draft.telefono || '').trim().replace(/\s+/g, ' ');
+  const tipo_telefono = (draft.tipo_telefono || 'Móvil').trim() || 'Móvil';
+  const normalized: AuditorTelefonoFormDraft = {
+    telefono,
+    tipo_telefono,
+    es_principal: Boolean(draft.es_principal),
+  };
+
+  if (!telefono) {
+    return { valid: false, message: 'El número telefónico es obligatorio.', normalized };
+  }
+
+  if (telefono.length > AUDITOR_TELEFONO_MAX_LENGTH || !AUDITOR_PHONE_FORMAT_REGEX.test(telefono)) {
+    return {
+      valid: false,
+      message: 'Ingrese un número telefónico válido (mínimo 6 dígitos o caracteres telefónicos).',
+      normalized,
+    };
+  }
+
+  const dup = existingTelefonos.some(
+    (t) => !t.deleted_at && t.telefono.trim() === telefono
+  );
+  if (dup) {
+    return {
+      valid: false,
+      message: 'Ese número de teléfono ya está registrado para este auditor.',
+      normalized,
+    };
+  }
+
+  return { valid: true, normalized };
+}
+
+export function validateAuditorEmailDraft(
+  draft: AuditorEmailFormDraft,
+  existingEmails: ReadonlyArray<Pick<EmailAuditorEntity, 'email' | 'deleted_at'>> = []
+): { valid: boolean; message?: string; normalized: AuditorEmailFormDraft } {
+  const email = (draft.email || '').trim().toLowerCase();
+  const tipo_email = (draft.tipo_email || 'Principal').trim() || 'Principal';
+  const normalized: AuditorEmailFormDraft = {
+    email,
+    tipo_email,
+    es_principal: Boolean(draft.es_principal),
+  };
+
+  if (!email) {
+    return { valid: false, message: 'El correo electrónico es obligatorio.', normalized };
+  }
+
+  if (email.length > AUDITOR_EMAIL_MAX_LENGTH || !AUDITOR_EMAIL_FORMAT_REGEX.test(email)) {
+    return {
+      valid: false,
+      message: 'Ingrese un correo electrónico válido (ej. auditor@dominio.com).',
+      normalized,
+    };
+  }
+
+  const dup = existingEmails.some(
+    (e) => !e.deleted_at && e.email.trim().toLowerCase() === email
+  );
+  if (dup) {
+    return {
+      valid: false,
+      message: 'Ese correo electrónico ya está registrado para este auditor.',
+      normalized,
+    };
+  }
+
+  return { valid: true, normalized };
+}
+
+export function validateEvaluacionInSituDraft(
+  draft: EvaluacionInSituFormDraft
+): { valid: boolean; message?: string; normalized: EvaluacionInSituFormDraft } {
+  const ultCheck = normalizeOptionalIsoDate(draft.ultima_evaluacion_fecha);
+  const proxCheck = normalizeOptionalIsoDate(draft.proxima_evaluacion_fecha);
+
+  const normalized: EvaluacionInSituFormDraft = {
+    etiqueta_periodo: (draft.etiqueta_periodo || '').trim(),
+    norma_referencia: (draft.norma_referencia || '').trim(),
+    sector_area_evaluado: (draft.sector_area_evaluado || '').trim(),
+    ultima_evaluacion_fecha: ultCheck.ok ? ultCheck.value : null,
+    proxima_evaluacion_fecha: proxCheck.ok ? proxCheck.value : null,
+    ultima_evaluacion_texto: (draft.ultima_evaluacion_texto || '').trim(),
+    proxima_evaluacion_texto: (draft.proxima_evaluacion_texto || '').trim(),
+    observaciones: (draft.observaciones || '').trim(),
+  };
+
+  if (!ultCheck.ok) {
+    return { valid: false, message: ultCheck.message, normalized };
+  }
+  if (!proxCheck.ok) {
+    return { valid: false, message: proxCheck.message, normalized };
+  }
+
+  const hasAnyContent = Boolean(
+    normalized.etiqueta_periodo ||
+      normalized.norma_referencia ||
+      normalized.sector_area_evaluado ||
+      normalized.ultima_evaluacion_fecha ||
+      normalized.proxima_evaluacion_fecha ||
+      normalized.ultima_evaluacion_texto ||
+      normalized.proxima_evaluacion_texto ||
+      normalized.observaciones
+  );
+  if (!hasAnyContent) {
+    return {
+      valid: false,
+      message: 'Debe ingresar al menos un período, fecha, sector o nota de evaluación in situ.',
       normalized,
     };
   }
