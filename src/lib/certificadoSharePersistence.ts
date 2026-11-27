@@ -962,7 +962,7 @@ export async function persistShareProcesos(
             .limit(1)
             .maybeSingle();
           const candidateId = verRow?.id ? String(verRow.id).trim() : '';
-          if (UUID_REGEX.test(candidateId)) {
+          if (isValidUuid(candidateId)) {
             resolvedVerId = candidateId;
           }
         } catch {
@@ -1176,7 +1176,7 @@ export async function persistSyncProcesoRequisitos(
           .limit(1)
           .maybeSingle();
         const candidateId = verRow?.id ? String(verRow.id).trim() : '';
-        if (UUID_REGEX.test(candidateId)) {
+        if (isValidUuid(candidateId)) {
           targetVerId = candidateId;
         }
       } catch {

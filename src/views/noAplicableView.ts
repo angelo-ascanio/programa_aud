@@ -330,8 +330,10 @@ export function renderNoAplicableChecklistRowsHtml(params: {
   rows: ReadonlyArray<NoAplicablePickerRow>;
   selectedReqId: string;
   expandedClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
+  filterQuery?: string;
 }): string {
   const { rows, selectedReqId, expandedClauseIds } = params;
+  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
   const effectiveExpandedSet =
     expandedClauseIds === undefined
       ? new Set(getDefaultExpandedClauseIds(rows))
@@ -350,7 +352,9 @@ export function renderNoAplicableChecklistRowsHtml(params: {
 
   return visibleRows
     .map((row) => {
-      const indentClass = getNoAplicableRowIndentClass(row.indentLevel);
+      const indentClass = getNoAplicableRowIndentClass(
+        isSearching ? (row.ancestorIds?.length || 0) + 1 : row.indentLevel
+      );
       const isSelected = !row.disabled && selectedReqId === row.req.id;
       const isCollapsible = row.hasChildren;
       const isExpanded = isCollapsible && effectiveExpandedSet.has(row.req.id);
@@ -641,6 +645,7 @@ function renderNoAplicableParentSelectors(params: {
                   rows: pickerRows,
                   selectedReqId: draft.id_requisito,
                   expandedClauseIds,
+                  filterQuery: clauseFilterQuery,
                 })}
               </div>
             `

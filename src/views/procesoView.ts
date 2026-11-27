@@ -968,9 +968,13 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
     `;
   }
 
+  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
+
   return visibleRows
     .map((row) => {
-      const indentClass = getBatchRowIndentClass(row.indentLevel);
+      const indentClass = getBatchRowIndentClass(
+        isSearching ? (row.ancestorIds?.length || 0) + 1 : row.indentLevel
+      );
       const isChecked = !row.disabled && selectedIdSet.has(row.req.id);
       const isCollapsible = row.hasChildren;
       const isExpanded = isCollapsible && effectiveExpandedSet.has(row.req.id);

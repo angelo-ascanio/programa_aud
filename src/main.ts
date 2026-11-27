@@ -104,6 +104,7 @@ import {
   type CatalogItem,
 } from './views/extraView';
 import { renderNormaRequisitosTableSection } from './views/normaView';
+import { renderNoAplicableChecklistRowsHtml } from './views/noAplicableView';
 import {
   renderFullNormaSearchSummaryText,
   renderNormativeObligationBadges,
@@ -684,6 +685,7 @@ import {
   createProcesoFormDraftFromEntity,
   expandPendingMandatoryClauseIds,
   getAllSeededNormaRequirements,
+  getDefaultExpandedClauseIds,
   getScopedNormaRequirements,
   getSyncedSameNormPeerCertIds,
   resolveProcesoDetailById,
@@ -752,12 +754,14 @@ import {
   type TurnoFormDraft,
 } from './lib/turnoDomain';
 import {
+  buildNoAplicablePickerRows,
   computeNoAplicableMutationPreview,
   createEmptyNoAplicableFormDraft,
   createNoAplicableFormDraftFromEntity,
   reconcileNoAplicableDraftOnCertChange,
   resolveNoAplicableDetailById,
   validateNoAplicableDraft,
+  type NoAplicableClauseMode,
   type NoAplicableFormDraft,
   type NoAplicableViewState,
 } from './lib/noAplicableDomain';
@@ -21813,9 +21817,11 @@ function bindAuthenticatedEvents(): void {
             id_certificado_version?: string;
             id_requisito: string;
           }> = [];
+          const seenDbReqIds = new Set<string>();
           for (const item of persistableReqs) {
             const dbReqId = await ensureRequisitoInDb(item, catalogSnapshot);
-            if (STRICT_UUID_PATTERN.test(dbReqId)) {
+            if (STRICT_UUID_PATTERN.test(dbReqId) && !seenDbReqIds.has(dbReqId)) {
+              seenDbReqIds.add(dbReqId);
               upsertRows.push({
                 id_proceso: procesoId,
                 id_certificado: targetCertId,
@@ -27728,6 +27734,7 @@ function bindAuthenticatedEvents(): void {
       expandedClauseIds: isSearching
         ? state.noAplicableDomain.searchExpandedClauseIds
         : state.noAplicableDomain.expandedClauseIds,
+      filterQuery: resolved.filterQuery,
     });
     if (preserveScroll) {
       container.scrollTop = prevScrollTop;
@@ -37409,6 +37416,7 @@ async function loadLiveCertificates(): Promise<void> {
                     ? {
                         ...dbProc.requisitos_by_certificado,
                         [certId]: {
+                          ...(dbProc.requisitos_by_certificado[certId] || {}),
                           clausulas_cubiertas: clausulas,
                           requisitos_detalle: detalles,
                         },
