@@ -606,8 +606,8 @@ function renderTemporalDetailView(opts: {
           class="rounded-xl border border-slate-200 bg-white p-3.5 space-y-3 shadow-2xs"
           novalidate
         >
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div class="space-y-1">
+          <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+            <div class="space-y-1 md:col-span-5">
               <label for="batchTemporalEtiquetaInput" class="block text-xs font-bold text-slate-700">
                 Nombre / Proyecto Temporal <span class="text-rose-600">*</span>
               </label>
@@ -625,7 +625,7 @@ function renderTemporalDetailView(opts: {
               />
             </div>
 
-            <div class="space-y-1">
+            <div class="space-y-1 md:col-span-4">
               <label for="batchTemporalUbicacionInput" class="block text-xs font-bold text-slate-700">
                 Ubicación <span class="text-rose-600">*</span>
               </label>
@@ -643,7 +643,7 @@ function renderTemporalDetailView(opts: {
               />
             </div>
 
-            <div class="space-y-1">
+            <div class="space-y-1 md:col-span-3">
               <label for="temporalDaysInput" class="block text-xs font-bold text-slate-700">
                 Días (0.25d) <span class="text-rose-600">*</span>
               </label>
@@ -668,7 +668,7 @@ function renderTemporalDetailView(opts: {
                   required
                   value="${escapeHtml(roundAuditDaysQuarter(draft.tiempo_auditoria || 1.0).toFixed(2))}"
                   ${!isStaff ? 'disabled' : ''}
-                  class="w-full h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-mono font-bold text-slate-900 text-center tabular-nums focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
+                  class="w-full h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-mono font-bold text-slate-900 text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-violet-600 focus:outline-none disabled:bg-slate-100"
                 />
                 <button
                   type="button"

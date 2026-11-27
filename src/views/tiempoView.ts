@@ -733,7 +733,7 @@ function renderTiempoDetailView(opts: {
                     value="${escapeHtml(draftStr)}"
                     ${isSaving ? 'disabled' : ''}
                     aria-label="Días-auditor para ${escapeHtml(site.nombre_sitio)}"
-                    class="w-20 h-7 rounded-md border border-slate-300 bg-white px-1.5 text-xs font-mono font-bold text-slate-900 text-center tabular-nums focus:border-slate-900 focus:outline-none disabled:opacity-60"
+                    class="w-20 h-7 rounded-md border border-slate-300 bg-white px-1.5 text-xs font-mono font-bold text-slate-900 text-center tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-slate-900 focus:outline-none disabled:opacity-60"
                   />
                   <button
                     type="button"

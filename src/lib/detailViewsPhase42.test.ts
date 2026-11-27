@@ -24,6 +24,13 @@ import { renderTurnoView } from '../views/turnoView';
 import { renderOrganizacionView } from '../views/organizacionView';
 import { renderCertificadoView } from '../views/certificadoView';
 import { renderAuditorView } from '../views/auditorView';
+import {
+  DEFAULT_DESIGNACION_TEMPORAL_STATE,
+  renderDesignacionTemporalView,
+} from '../views/designacionTemporalView';
+import { DEFAULT_TIEMPO_STATE, renderTiempoView } from '../views/tiempoView';
+import type { ProgramaAuditoriaEntity } from './auditPlanningEngine';
+import type { AuditoriaSitioTemporalEntity } from './designacionTemporalDomain';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -489,5 +496,266 @@ test('Step Final Primitives: renderDetailFormTopActions orders Save before Cance
   assert.equal(editUncheckedBool.includes('aria-hidden="true">*</span>'), false);
   assert.ok(editUncheckedBool.includes('type="checkbox"'));
   assert.equal(editUncheckedBool.includes('disabled'), false);
+});
+
+test('Step 4.2 Less Is More Detail Views: 1.5 Temporal & 2. Tiempo inherit unified Zone 1-2 shell, omit Zone 3 noise, and enforce RBAC', () => {
+  const workerProfile: UserProfile = {
+    id: '22222222-2222-2222-2222-222222222222',
+    nombre: 'Coordinador Técnico',
+    role: 'WORKER',
+    status: 'APPROVED',
+  };
+  const auditorProfile: UserProfile = {
+    id: '33333333-3333-3333-3333-333333333333',
+    nombre: 'Auditor ISO',
+    role: 'AUDITOR',
+    status: 'APPROVED',
+  };
+  const clientProfile: UserProfile = {
+    id: '44444444-4444-4444-4444-444444444444',
+    nombre: 'Cliente Organización',
+    role: 'CLIENT',
+    status: 'APPROVED',
+  };
+
+  const certA = INITIAL_CERTIFICADOS_DETAILED[0];
+  const certB = INITIAL_CERTIFICADOS_DETAILED[1];
+  const progId = '70000000-0000-0000-0000-000000000420';
+  const auditAId = '80000000-0000-0000-0000-000000000421';
+  const auditBId = '80000000-0000-0000-0000-000000000422';
+  const tempId = '9a000000-0000-0000-0000-000000000421';
+
+  const baseAuditA = {
+    ...INITIAL_PROGRAMACION_AUDITS[0],
+    id: auditAId,
+    id_programa_auditoria: progId,
+    id_certificado: certA.id,
+    numero_certificado: certA.numero_certificado,
+    id_organizacion: certA.id_organizacion,
+    organizacion_nombre: certA.organizacion_nombre,
+    norma_codigo: certA.norma_codigo,
+    codigo_auditoria: 'AUD-2026-421',
+    tiene_sitio_temporal: true,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000421',
+        id_auditoria: auditAId,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA' as const,
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-07-10',
+        fecha_fin: '2026-07-12',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: '82000000-0000-0000-0000-000000000421',
+        id_auditoria: auditAId,
+        id_sitio: certA.sitios[0].id,
+        numero_sitio: 0,
+        nombre_sitio: certA.sitios[0].nombre_sitio,
+        tiempo_auditoria: 2.5,
+        modalidad_evaluacion: 'Presencial' as const,
+        procesos: [],
+        equipoSitio: [],
+        deleted_at: null,
+      },
+    ],
+  };
+
+  const baseAuditB = {
+    ...INITIAL_PROGRAMACION_AUDITS[0],
+    id: auditBId,
+    id_programa_auditoria: progId,
+    id_certificado: certB.id,
+    numero_certificado: certB.numero_certificado,
+    id_organizacion: certB.id_organizacion,
+    organizacion_nombre: certB.organizacion_nombre,
+    norma_codigo: certB.norma_codigo,
+    codigo_auditoria: 'AUD-2026-422',
+    tiene_sitio_temporal: true,
+    fechas: [
+      {
+        id: '81000000-0000-0000-0000-000000000422',
+        id_auditoria: auditBId,
+        numero_secuencia: 1,
+        tag: 'Programación',
+        tipo_fecha: 'PROGRAMADA_EXACTA' as const,
+        anio: null,
+        mes: null,
+        fecha_inicio: '2026-07-10',
+        fecha_fin: '2026-07-12',
+        observacion: null,
+        deleted_at: null,
+      },
+    ],
+    sitiosPlan: [
+      {
+        id: '82000000-0000-0000-0000-000000000422',
+        id_auditoria: auditBId,
+        id_sitio: certB.sitios[0].id,
+        numero_sitio: 0,
+        nombre_sitio: certB.sitios[0].nombre_sitio,
+        tiempo_auditoria: 1.5,
+        modalidad_evaluacion: 'Remota' as const,
+        procesos: [],
+        equipoSitio: [],
+        deleted_at: null,
+      },
+    ],
+  };
+
+  const linkedProgram: ProgramaAuditoriaEntity = {
+    id: progId,
+    id_grupo_empresarial: '20000000-0000-0000-0000-000000000001',
+    codigo_programa: 'PROG-420',
+    etiqueta: 'Campaña Integrada 4.2',
+    nivel_vinculacion: 'NIVEL_1_INTRA_ORG',
+    tipo_vinculacion: 'Integrada',
+    es_vinculada: true,
+    tiene_sitio_temporal: true,
+    id_ciclo_origen: null,
+    notas: null,
+    deleted_at: null,
+    auditorias: [baseAuditA, baseAuditB],
+  };
+
+  const temporalEntity: AuditoriaSitioTemporalEntity = {
+    id: tempId,
+    id_auditoria: auditAId,
+    etiqueta: 'Proyecto Ampliación 4.2',
+    comentario: 'Ubicación: Valencia Nave 2',
+    tiempo_auditoria: 1.25,
+    certificados: [
+      {
+        id: '9b000000-0000-0000-0000-000000000421',
+        id_sitio_temporal: tempId,
+        id_auditoria_certificado: auditAId,
+        numero_certificado: certA.numero_certificado,
+        organizacion_nombre: certA.organizacion_nombre,
+        norma_codigo: certA.norma_codigo,
+      },
+      {
+        id: '9b000000-0000-0000-0000-000000000422',
+        id_sitio_temporal: tempId,
+        id_auditoria_certificado: auditBId,
+        numero_certificado: certB.numero_certificado,
+        organizacion_nombre: certB.organizacion_nombre,
+        norma_codigo: certB.norma_codigo,
+      },
+    ],
+    equipoTemporal: [],
+    deleted_at: null,
+  };
+
+  // 1.5 Temporal (Staff)
+  const temporalHtml = renderDesignacionTemporalView({
+    profile: workerProfile,
+    state: {
+      ...DEFAULT_DESIGNACION_TEMPORAL_STATE,
+      selectedCertId: certA.id,
+      selectedAuditId: auditAId,
+    },
+    programs: [linkedProgram],
+    audits: [baseAuditA, baseAuditB],
+    temporalSites: [temporalEntity],
+    vinculos: [],
+    conglomerados: [],
+    organizaciones: INITIAL_ORGANIZACIONES,
+    certificados: INITIAL_CERTIFICADOS_DETAILED,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(assertZeroUuidExposure(temporalHtml).compliant, true);
+  assert.ok(temporalHtml.includes('data-testid="audit-zone-1-data"'));
+  assert.ok(temporalHtml.includes('data-testid="audit-zone-2-selectors"'));
+  assert.ok(temporalHtml.includes('data-action="select-linked-sibling-select"'));
+  assert.ok(temporalHtml.includes('data-testid="temporal-shared-batch-badge"'));
+  assert.ok(temporalHtml.includes('Aplica al lote completo (2 certificados)'));
+  assert.ok(temporalHtml.includes('md:grid-cols-12'));
+  assert.ok(temporalHtml.includes('id="batchTemporalEtiquetaInput"'));
+  assert.ok(temporalHtml.includes('id="batchTemporalUbicacionInput"'));
+  assert.ok(temporalHtml.includes('id="temporalDaysInput"'));
+  assert.ok(temporalHtml.includes('data-action="save-batch-temporal-site"'));
+  assert.equal(temporalHtml.includes('data-testid="temporal-linked-batch-banner"'), false);
+  // Zone 3 must not repeat the planned date string 10/07/2026 outside Zone 1
+  const temporalZone3 = temporalHtml.slice(temporalHtml.indexOf('aria-label="Detalle del registro"'));
+  assert.equal(temporalZone3.includes('10/07/2026'), false);
+
+  // 2. Tiempo (Staff)
+  const tiempoHtml = renderTiempoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      ...DEFAULT_TIEMPO_STATE,
+      selectedCertId: certA.id,
+      selectedAuditId: auditAId,
+    },
+    programs: [linkedProgram],
+    audits: [baseAuditA, baseAuditB],
+    temporalSites: [temporalEntity],
+    vinculos: [],
+    conglomerados: [],
+    organizaciones: INITIAL_ORGANIZACIONES,
+    certificados: INITIAL_CERTIFICADOS_DETAILED,
+    referenceIsoDate: '2026-06-01',
+  });
+  assert.equal(assertZeroUuidExposure(tiempoHtml).compliant, true);
+  assert.ok(tiempoHtml.includes('data-testid="audit-zone-1-data"'));
+  assert.ok(tiempoHtml.includes('data-testid="audit-zone-2-selectors"'));
+  assert.ok(tiempoHtml.includes('data-testid="tiempo-summary-banner"'));
+  assert.ok(tiempoHtml.includes('Total:'));
+  assert.ok(tiempoHtml.includes('2.50 d'));
+  assert.ok(tiempoHtml.includes('Completo ✓'));
+  assert.ok(tiempoHtml.includes('data-testid="tiempo-temporal-note"'));
+  assert.ok(tiempoHtml.includes('Proyecto Ampliación 4.2'));
+  assert.ok(tiempoHtml.includes('1.25 d'));
+  assert.ok(tiempoHtml.includes('Editar en 1.5 Temporal →'));
+  assert.ok(tiempoHtml.includes('data-action="change-tiempo-site-modality"'));
+  assert.ok(tiempoHtml.includes('data-action="step-tiempo-site-days"'));
+
+  // Read-only RBAC checks for AUDITOR & CLIENT
+  for (const roProfile of [auditorProfile, clientProfile]) {
+    const roTemp = renderDesignacionTemporalView({
+      profile: roProfile,
+      state: {
+        ...DEFAULT_DESIGNACION_TEMPORAL_STATE,
+        selectedCertId: certA.id,
+        selectedAuditId: auditAId,
+      },
+      programs: [linkedProgram],
+      audits: [baseAuditA, baseAuditB],
+      temporalSites: [temporalEntity],
+      vinculos: [],
+      conglomerados: [],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      referenceIsoDate: '2026-06-01',
+    });
+    assert.ok(roTemp.includes('Solo lectura'));
+    assert.equal(roTemp.includes('data-action="save-batch-temporal-site"'), false);
+
+    const roTiempo = renderTiempoView({
+      profile: roProfile,
+      state: {
+        ...DEFAULT_TIEMPO_STATE,
+        selectedCertId: certA.id,
+        selectedAuditId: auditAId,
+      },
+      programs: [linkedProgram],
+      audits: [baseAuditA, baseAuditB],
+      temporalSites: [temporalEntity],
+      vinculos: [],
+      conglomerados: [],
+      organizaciones: INITIAL_ORGANIZACIONES,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      referenceIsoDate: '2026-06-01',
+    });
+    assert.ok(roTiempo.includes('Solo lectura'));
+    assert.equal(roTiempo.includes('data-action="step-tiempo-site-days"'), false);
+    assert.equal(roTiempo.includes('data-action="change-tiempo-site-modality"'), false);
+  }
 });
 
