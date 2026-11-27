@@ -818,6 +818,7 @@ export function renderAuditoriasView(
       authorizedClientOrgIds: state.authorizedClientOrgIds ?? [],
       certificados: state.allCertificadosDetailed ?? [],
       certificates: state.certificates,
+      auditors: state.allAuditorsDetailed ?? [],
       loading: state.loading,
       tableColumnWidths: state.tableColumnWidths,
       inCardBreadcrumbHtml,

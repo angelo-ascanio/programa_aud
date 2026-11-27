@@ -13,7 +13,11 @@ import {
   type ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
-import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import {
+  evaluateAuditorInSituStatus,
+  formatAuditorDisplayLabel,
+  type AuditorDetailEntity,
+} from '../lib/competencyMatrix';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 import type { AuditoriaSitioTemporalEntity } from '../lib/designacionTemporalDomain';
@@ -873,6 +877,24 @@ function renderAuditorDetailView(opts: {
             ${escapeHtml(member.competency.label)}
           </span>
           ${
+            member.inSituWarning
+              ? `<span data-testid="asignacion-member-insitu-badge" title="${escapeHtml(member.inSituWarning)} (no bloqueante)" class="px-1.5 py-0.5 rounded text-[10px] font-semibold border ${member.inSituBadgeClass || 'bg-amber-50 text-amber-800 border-amber-200'} whitespace-nowrap">${escapeHtml(member.inSituWarning)}</span>`
+              : ''
+          }
+          ${
+            member.observacionSectorWarning
+              ? `<span data-testid="asignacion-member-obs-sector-badge" title="${escapeHtml(member.observacionSectorWarning.rawText)}" class="px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                  member.observacionSectorWarning.coveredByExperto
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-200'
+                } whitespace-nowrap">${
+                  member.observacionSectorWarning.coveredByExperto
+                    ? `Exp. Técnico asignado ✓ (Sector ${member.observacionSectorWarning.intersectedSectors.join(', ')})`
+                    : `Req. Exp. Técnico (Sector ${member.observacionSectorWarning.intersectedSectors.join(', ')})`
+                }</span>`
+              : ''
+          }
+          ${
             member.hasScheduleConflict
               ? `<span title="${escapeHtml(member.scheduleConflictMessages.join(' | '))}" class="text-[10px] font-bold text-rose-700 whitespace-nowrap">⚠ Conflicto calendario</span>`
               : ''
@@ -1038,8 +1060,14 @@ function renderAuditorDetailView(opts: {
                           ? 'Ya asignado'
                           : 'Disponible';
                         const compHint = match.level === 'FULL' ? '✓ Calificado' : match.label;
+                        const inSitu = evaluateAuditorInSituStatus(aud);
+                        const inSituTag =
+                          inSitu === 'Vencido' || inSitu === 'Pendiente Evaluación'
+                            ? ` · Ev. ${inSitu}`
+                            : '';
                         const selected = aud.id === defaultAuditorId ? 'selected' : '';
-                        return `<option value="${escapeHtml(aud.id)}" ${selected}>${escapeHtml(aud.nombre)} — ${escapeHtml(compHint)} · ${availHint}</option>`;
+                        const displayLabel = formatAuditorDisplayLabel(aud);
+                        return `<option value="${escapeHtml(aud.id)}" ${selected}>${escapeHtml(displayLabel)} — ${escapeHtml(compHint)} · ${availHint}${escapeHtml(inSituTag)}</option>`;
                       })
                       .join('')
               }
@@ -1302,6 +1330,33 @@ function renderAuditorDetailView(opts: {
         </div>
 
         ${iafGapBannerHtml}
+
+        ${
+          detail.observacionSectoresAlerts.length > 0
+            ? detail.observacionSectoresAlerts
+                .map((obsAlert) => {
+                  const sectorsText = obsAlert.intersectedSectors.join(', ');
+                  const msg = obsAlert.coveredByExperto
+                    ? `✓ Condición sectorial de ${obsAlert.auditorNombre} (Sector ${sectorsText}) cubierta con Experto Técnico asignado (${obsAlert.coveringExpertNames.join(', ')}).`
+                    : `⚠ ${obsAlert.auditorNombre} requiere acompañamiento de Experto Técnico en Sector ${sectorsText} ("${obsAlert.rawText}"). Puede asignar un Experto Técnico global abajo.`;
+                  return `
+                    <div
+                      role="status"
+                      data-testid="asignacion-obs-sectores-banner"
+                      class="rounded-lg border ${
+                        obsAlert.coveredByExperto
+                          ? 'border-emerald-200 bg-emerald-50/80 text-emerald-950'
+                          : 'border-amber-200 bg-amber-50/90 text-amber-950'
+                      } px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                    >
+                      <span class="font-semibold">${escapeHtml(msg)}</span>
+                      <span class="text-[10px] font-bold opacity-80 whitespace-nowrap">No bloqueante</span>
+                    </div>
+                  `;
+                })
+                .join('')
+            : ''
+        }
 
         ${
           detail.rotationSummary?.requiresRotation && detail.rotationSummary.warningMessage

@@ -11,6 +11,7 @@
  */
 
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from './auditExecution';
+import { formatAuditorDisplayLabel, type AuditorDetailEntity } from './competencyMatrix';
 import {
   formatAuditDateLabel,
   roundAuditDaysQuarter,
@@ -116,6 +117,7 @@ export interface ComputeAuditStatusSummaryInput {
   temporalSites?: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings?: ReadonlyArray<Phase5FindingEntity>;
   detailedCerts?: ReadonlyArray<CertificadoDetailEntity>;
+  auditors?: ReadonlyArray<AuditorDetailEntity>;
 }
 
 const SECTION_STATUS_VISUALS: Record<
@@ -686,7 +688,14 @@ export function computeAuditStatusSummary(
     auditorHeadline = `${audCount} ${audCount === 1 ? 'auditor' : 'auditores'} · ${formatDaysValue(
       totalAssignedDays
     )}/${formatDaysValue(totalRequiredDays)} d ✓`;
-    auditorSecondary = audit.auditor_lider ? `Líder: ${audit.auditor_lider}` : 'Equipo balanceado';
+    const matchedLeader =
+      audit.auditor_lider_id && input.auditors?.length
+        ? input.auditors.find((a) => a.id === audit.auditor_lider_id)
+        : undefined;
+    const leaderLabel = matchedLeader
+      ? formatAuditorDisplayLabel(matchedLeader)
+      : audit.auditor_lider;
+    auditorSecondary = leaderLabel ? `Líder: ${leaderLabel}` : 'Equipo balanceado';
   } else {
     auditorStatus = totalAssignedDays > 0 ? 'EN_PROGRESO' : 'PENDIENTE';
     const diff = roundAuditDaysQuarter(totalRequiredDays - totalAssignedDays);

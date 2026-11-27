@@ -1103,3 +1103,148 @@ test('Step 3.1.2 Calendario Smart Alerts, Dynamic Threshold Recalculation & Stri
   assert.equal(assertZeroUuidExposure(clientCalHtml).compliant, true);
 });
 
+test('Step 4.1 Calendario Operational In-Situ Alerts (non-saturating) & Homonym Disambiguation', () => {
+  const programs = buildMultiCampaignFixture();
+  const baseAuditors = INITIAL_AUDITORES_DETAILED.slice(0, 2);
+  const yc1 = {
+    ...baseAuditors[0],
+    id: '10000000-0000-0000-0000-000000000045',
+    nombre: 'Yurima Carrillo',
+    siglas: 'YC',
+    cedula_identidad: '7137643',
+    sin_registro_evaluacion: false,
+    proxima_evaluacion_in_situ_fecha: '2024-01-01',
+    observaciones_evaluacion: '',
+    observacion_sectores: '',
+  };
+  const yc2 = {
+    ...baseAuditors[0],
+    id: '10000000-0000-0000-0000-000000000047',
+    nombre: 'Yurima Carrillo',
+    siglas: 'YC',
+    cedula_identidad: '12310919',
+    sin_registro_evaluacion: false,
+    proxima_evaluacion_in_situ_fecha: '2026-08-01',
+    observaciones_evaluacion: '',
+    observacion_sectores: '',
+  };
+
+  // Both Yurima Carrillos assigned to active first program audit -> consolidated 1 AUDITOR_IN_SITU alert
+  const activeProgWithExpired = {
+    ...programs[0],
+    auditorias: [
+      {
+        ...programs[0].auditorias[0],
+        auditor_lider_id: yc1.id,
+        auditor_lider: yc1.nombre,
+        equipo: [
+          {
+            id: 'tm-yc1',
+            id_auditor: yc1.id,
+            nombre: yc1.nombre,
+            rol: 'Auditor Líder' as const,
+            competencia_norma: 'ISO 9001:2015',
+            competencia_sector_iaf: 17,
+            credencial_codigo: 'YC',
+            estado_credencial: 'Vencido' as const,
+          },
+          {
+            id: 'tm-yc2',
+            id_auditor: yc2.id,
+            nombre: yc2.nombre,
+            rol: 'Auditor de Equipo' as const,
+            competencia_norma: 'ISO 9001:2015',
+            competencia_sector_iaf: 17,
+            credencial_codigo: 'YC',
+            estado_credencial: 'Por Vencer' as const,
+          },
+        ],
+      },
+    ],
+  };
+
+  const alerts = computeAuditAlerts(
+    [activeProgWithExpired],
+    DEFAULT_AUDIT_ALERT_CONFIG,
+    '2026-07-01',
+    [yc1, yc2]
+  );
+  const inSituAlerts = alerts.filter((a) => a.category === 'AUDITOR_IN_SITU');
+  assert.equal(inSituAlerts.length, 1);
+  assert.ok(inSituAlerts[0].message.includes('Yurima Carrillo (YC · C.I. 7137643) (Vencido)'));
+  assert.ok(inSituAlerts[0].message.includes('Yurima Carrillo (YC · C.I. 12310919) (Por Vencer)'));
+  assert.equal(assertZeroUuidExposure(inSituAlerts[0].message).compliant, true);
+
+  // Terminal Cerrada audit does NOT emit AUDITOR_IN_SITU alerts
+  const closedAlerts = computeAuditAlerts(
+    [
+      {
+        ...activeProgWithExpired,
+        auditorias: [
+          {
+            ...activeProgWithExpired.auditorias[0],
+            estado_ciclo: 'Cerrada',
+            estatus: 'Cerrada',
+          },
+        ],
+      },
+    ],
+    DEFAULT_AUDIT_ALERT_CONFIG,
+    '2026-07-01',
+    [yc1, yc2]
+  );
+  assert.equal(closedAlerts.filter((a) => a.category === 'AUDITOR_IN_SITU').length, 0);
+
+  // Calendario renders disambiguated #calFilterAuditor options and hides AUDITOR_IN_SITU from CLIENT
+  const staffCal = renderCalendarioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      viewMode: 'calendar',
+      displayMode: 'mes',
+      referenceYear: 2026,
+      referenceMonth: 7,
+      filterAuditorId: 'ALL',
+      filterStandard: 'ALL',
+      filterMethodology: 'ALL',
+      drawerAuditId: null,
+      alertsPanelOpen: true,
+      alertCategoryFilter: 'AUDITOR_IN_SITU',
+    },
+    audits: activeProgWithExpired.auditorias,
+    auditors: [yc1, yc2],
+    standards: [{ norma: 'ISO 9001:2015' }],
+    programs: [activeProgWithExpired],
+    auditAlerts: alerts,
+    alertConfig: DEFAULT_AUDIT_ALERT_CONFIG,
+  });
+  assert.ok(staffCal.includes('Yurima Carrillo (YC · C.I. 7137643)'));
+  assert.ok(staffCal.includes('Yurima Carrillo (YC · C.I. 12310919)'));
+  assert.ok(staffCal.includes('Evaluación In Situ vencida en equipo'));
+  assert.equal(assertZeroUuidExposure(staffCal).compliant, true);
+
+  const clientCal = renderCalendarioView({
+    profile: CLIENT_PROFILE,
+    state: {
+      viewMode: 'calendar',
+      displayMode: 'mes',
+      referenceYear: 2026,
+      referenceMonth: 7,
+      filterAuditorId: 'ALL',
+      filterStandard: 'ALL',
+      filterMethodology: 'ALL',
+      drawerAuditId: null,
+      alertsPanelOpen: true,
+      alertCategoryFilter: 'ALL',
+    },
+    audits: activeProgWithExpired.auditorias,
+    auditors: [yc1, yc2],
+    standards: [{ norma: 'ISO 9001:2015' }],
+    programs: [activeProgWithExpired],
+    auditAlerts: alerts,
+    alertConfig: DEFAULT_AUDIT_ALERT_CONFIG,
+  });
+  assert.equal(clientCal.includes('Evaluación In Situ vencida en equipo'), false);
+  assert.equal(assertZeroUuidExposure(clientCal).compliant, true);
+});
+
+

@@ -848,3 +848,176 @@ test('Step 1.4 UI: renders non-blocking IAF gap indicator, hides EXPERTO_TECNICO
   assert.equal(assertZeroUuidExposure(htmlUncovered).compliant, true);
 });
 
+test('Step 4.1 UI: renders disambiguated Yurima Carrillo options, non-blocking in-situ badges, and observacion_sectores Experto Técnico banners with Zero-UUID', () => {
+  const certSec13Id = '40000000-0000-0000-0000-000000000411';
+  const auditSec13Id = '80000000-0000-0000-0000-000000000411';
+  const progId = '70000000-0000-0000-0000-000000000411';
+  const siteId = '51000000-0000-0000-0000-000000000411';
+  const yurima1Id = '10000000-0000-0000-0000-000000000045';
+  const yurima2Id = '10000000-0000-0000-0000-000000000047';
+  const nelsonId = '10000000-0000-0000-0000-000000000007';
+
+  const step41Auditors: AuditorDetailEntity[] = [
+    {
+      ...AUDITORS[0],
+      id: yurima1Id,
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '7137643',
+      sin_registro_evaluacion: false,
+      proxima_evaluacion_in_situ_fecha: '2020-01-01',
+      observaciones_evaluacion: '',
+      observacion_sectores: '',
+    },
+    {
+      ...AUDITORS[0],
+      id: yurima2Id,
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '12310919',
+      sin_registro_evaluacion: false,
+      proxima_evaluacion_in_situ_fecha: '2028-12-31',
+      observaciones_evaluacion: '',
+      observacion_sectores: '',
+    },
+    {
+      ...AUDITORS[0],
+      id: nelsonId,
+      nombre: 'Nelson Rafael Arteaga Quevedo',
+      siglas: 'NA',
+      cedula_identidad: '10847521',
+      sin_registro_evaluacion: false,
+      proxima_evaluacion_in_situ_fecha: '2028-12-31',
+      observaciones_evaluacion: '',
+      observacion_sectores: 'SECTOR 13 CON EXPERTO TECNICO.',
+      sectores_iaf: [13],
+    },
+  ];
+
+  const certsSec13: CertificadoDetailEntity[] = [
+    {
+      ...CERTIFICADOS[0],
+      id: certSec13Id,
+      numero_certificado: 'FN-QMS-2026-411',
+      id_sector_iaf: 's-13',
+      sector_iaf: 13,
+      sector_iaf_numero: 13,
+      id_subsector_iaf: 'sub-13-2',
+      subsector_iaf_codigo: '13.2',
+    },
+  ];
+
+  const auditSec13 = makeAudit({
+    id: auditSec13Id,
+    id_programa_auditoria: progId,
+    id_certificado: certSec13Id,
+    numero_certificado: 'FN-QMS-2026-411',
+    sector_iaf: 13,
+    sitiosPlan: [
+      makeSitePlan(siteId, auditSec13Id, 0, 'Planta Química', 2.0, [
+        {
+          id: 'e1000000-0000-0000-0000-000000000411',
+          id_sitios_por_auditoria: siteId,
+          id_auditor: nelsonId,
+          auditor_nombre: 'Nelson Rafael Arteaga Quevedo',
+          rol_auditor: 'AUDITOR_LIDER',
+          tiempo_auditoria: 1.0,
+          asignacion_completa_sitio: true,
+          deleted_at: null,
+        },
+        {
+          id: 'e1000000-0000-0000-0000-000000000412',
+          id_sitios_por_auditoria: siteId,
+          id_auditor: yurima1Id,
+          auditor_nombre: 'Yurima Carrillo',
+          rol_auditor: 'AUDITOR',
+          tiempo_auditoria: 1.0,
+          asignacion_completa_sitio: true,
+          deleted_at: null,
+        },
+      ]),
+    ],
+  });
+
+  const progSec13: ProgramaAuditoriaEntity = {
+    id: progId,
+    id_vinculo: null,
+    id_grupo_empresarial: UUID_GRUPO,
+    codigo_programa: 'PRG-411',
+    etiqueta: 'Campaña Sector 13',
+    nivel_vinculacion: 'INDIVIDUAL',
+    tipo_vinculacion: 'Individual',
+    es_vinculada: false,
+    tiene_sitio_temporal: false,
+    id_ciclo_origen: null,
+    notas: null,
+    deleted_at: null,
+    auditorias: [auditSec13],
+  };
+
+  const uncoveredHtml = renderAsignacionView({
+    profile: ADMIN_PROFILE,
+    state: makeState({
+      selectedCertId: certSec13Id,
+      selectedAuditId: auditSec13Id,
+    }),
+    programs: [progSec13],
+    audits: [auditSec13],
+    temporalSites: [],
+    auditors: step41Auditors,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    certificados: certsSec13,
+    vinculos: [],
+    conglomerados: CONGLOMERADOS,
+  });
+
+  // Homonym options & member rows
+  assert.ok(uncoveredHtml.includes('Yurima Carrillo (YC · C.I. 7137643)'));
+  assert.ok(uncoveredHtml.includes('Yurima Carrillo (YC · C.I. 12310919)'));
+  // Non-blocking in-situ badge + observacion_sectores badge & banner
+  assert.match(uncoveredHtml, /data-testid="asignacion-member-insitu-badge"/);
+  assert.match(uncoveredHtml, /Ev\. In Situ vencida/);
+  assert.match(uncoveredHtml, /data-testid="asignacion-member-obs-sector-badge"/);
+  assert.match(uncoveredHtml, /Req\. Exp\. Técnico \(Sector 13\)/);
+  assert.match(uncoveredHtml, /data-testid="asignacion-obs-sectores-banner"/);
+  assert.match(uncoveredHtml, /requiere acompañamiento de Experto Técnico en Sector 13/);
+  assert.equal(assertZeroUuidExposure(uncoveredHtml).compliant, true);
+
+  // With Sofía Quintero covering Sector 13 -> positive confirmation banner
+  const auditCovered: ProgramacionAuditEntity = {
+    ...auditSec13,
+    expertoTecnicoAsignaciones: [
+      {
+        id: '1e300000-0000-0000-0000-000000000411',
+        id_auditoria: auditSec13Id,
+        id_experto_tecnico: INITIAL_EXPERTOS_TECNICOS[0].id,
+        experto_nombre: INITIAL_EXPERTOS_TECNICOS[0].nombre,
+        experto_estatus: 'Disponible',
+        dias_asignados: 0.5,
+        observacion: 'Soporte técnico Sector 13',
+        deleted_at: null,
+      },
+    ],
+  };
+  const coveredHtml = renderAsignacionView({
+    profile: ADMIN_PROFILE,
+    state: makeState({
+      selectedCertId: certSec13Id,
+      selectedAuditId: auditSec13Id,
+    }),
+    programs: [{ ...progSec13, auditorias: [auditCovered] }],
+    audits: [auditCovered],
+    temporalSites: [],
+    auditors: step41Auditors,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    certificados: certsSec13,
+    vinculos: [],
+    conglomerados: CONGLOMERADOS,
+  });
+  assert.match(coveredHtml, /Exp\. Técnico asignado ✓ \(Sector 13\)/);
+  assert.match(coveredHtml, /Condición sectorial de/);
+  assert.match(coveredHtml, /cubierta con Experto Técnico asignado/);
+  assert.equal(assertZeroUuidExposure(coveredHtml).compliant, true);
+});
+
+

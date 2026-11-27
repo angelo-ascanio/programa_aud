@@ -860,3 +860,188 @@ test('Step 1.4 edge cases: partial team gap, sibling-only expert does not falsel
   assert.equal(unloadedDetail.iafGapStatus.hasIafSectorGap, false);
 });
 
+test('Step 4.1: buildAuditAuditorDetail disambiguates Yurima Carrillo homonyms, flags non-blocking in-situ warnings, and computes observacion_sectores Technical Expert alerts', () => {
+  const certSec13Id = '40000000-0000-0000-0000-000000000401';
+  const auditSec13Id = '80000000-0000-0000-0000-000000000401';
+  const progId = '70000000-0000-0000-0000-000000000401';
+  const yurima1Id = '10000000-0000-0000-0000-000000000045';
+  const yurima2Id = '10000000-0000-0000-0000-000000000047';
+  const nelsonId = '10000000-0000-0000-0000-000000000007';
+
+  const certs: CertificadoDetailEntity[] = [
+    {
+      id: certSec13Id,
+      numero_certificado: 'FN-QMS-2026-401',
+      id_organizacion: '30000000-0000-0000-0000-000000000001',
+      organizacion_nombre: 'Química Sector 13 C.A.',
+      id_norma: 'n-9001',
+      norma_codigo: 'ISO 9001:2015',
+      id_sector_iaf: 's-13',
+      sector_iaf: 13,
+      id_subsector_iaf: 'sub-13-2',
+      subsector_iaf_codigo: '13.2',
+      estatus: 'Vigente',
+      sitios: [],
+      procesos: [],
+      requisitos: [],
+      noAplicables: [],
+    },
+  ];
+
+  const yurima1 = makeAuditor({
+    id: yurima1Id,
+    nombre: 'Yurima Carrillo',
+    siglas: 'YC',
+    cedula_identidad: '7137643',
+    codigo_credencial: 'YC',
+    sin_registro_evaluacion: true,
+    proxima_evaluacion_in_situ_fecha: null,
+    observaciones_evaluacion: 'PENDIENTE POR EVALUACIÓN IN SITU',
+    observacion_sectores: '',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [13],
+    subsectorLinks: [],
+  });
+
+  const yurima2 = makeAuditor({
+    id: yurima2Id,
+    nombre: 'Yurima Carrillo',
+    siglas: 'YC',
+    cedula_identidad: '12310919',
+    codigo_credencial: 'YC',
+    sin_registro_evaluacion: false,
+    proxima_evaluacion_in_situ_fecha: '2020-01-01',
+    observaciones_evaluacion: '',
+    observacion_sectores: '',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [13],
+    subsectorLinks: [],
+  });
+
+  const nelson = makeAuditor({
+    id: nelsonId,
+    nombre: 'Nelson Rafael Arteaga Quevedo',
+    siglas: 'NA',
+    cedula_identidad: '10847521',
+    codigo_credencial: 'NA',
+    sin_registro_evaluacion: false,
+    proxima_evaluacion_in_situ_fecha: '2028-12-31',
+    observaciones_evaluacion: '',
+    observacion_sectores: 'SECTOR 13 CON EXPERTO TECNICO.',
+    normas_acreditadas: ['ISO 9001:2015'],
+    sectores_iaf: [13],
+    subsectorLinks: [
+      {
+        id_auditor: nelsonId,
+        id_subsector_iaf: 'sub-13-2',
+        id_sector_iaf: 's-13',
+        sector_numero: 13,
+        subsector_codigo: '13.2',
+        subsector_descripcion: 'Productos farmacéuticos',
+      },
+    ],
+  });
+
+  const auditSec13 = makeAudit({
+    id: auditSec13Id,
+    id_programa_auditoria: progId,
+    id_certificado: certSec13Id,
+    numero_certificado: 'FN-QMS-2026-401',
+    norma_codigo: 'ISO 9001:2015',
+    sector_iaf: 13,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000401', auditSec13Id, 0, 'Planta Química', 3.0, [
+        { idAuditor: nelsonId, nombre: 'Nelson Rafael Arteaga Quevedo', rol: 'AUDITOR_LIDER', days: 1.0 },
+        { idAuditor: yurima1Id, nombre: 'Yurima Carrillo', rol: 'AUDITOR', days: 1.0 },
+        { idAuditor: yurima2Id, nombre: 'Yurima Carrillo', rol: 'AUDITOR', days: 1.0 },
+      ]),
+    ],
+  });
+
+  const prog = makeProgram(progId, 'Lote Sector 13', [auditSec13]);
+
+  const detailUncovered = buildAuditAuditorDetail({
+    activeAudit: auditSec13,
+    audits: [auditSec13],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [yurima1, yurima2, nelson],
+    certificados: certs,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    auditExpertAssignments: [],
+  });
+
+  // Still COMPLETO despite non-blocking in-situ & observacion_sectores alerts
+  assert.equal(detailUncovered.statusKey, 'COMPLETO');
+  const members = detailUncovered.units[0].members;
+  assert.equal(members[0].auditorNombre, 'Nelson Rafael Arteaga Quevedo (NA · C.I. 10847521)');
+  assert.equal(members[0].inSituWarning, null);
+  assert.equal(members[0].observacionSectorWarning?.coveredByExperto, false);
+  assert.deepEqual(members[0].observacionSectorWarning?.intersectedSectors, [13]);
+  assert.equal(members[1].auditorNombre, 'Yurima Carrillo (YC · C.I. 7137643)');
+  assert.equal(members[1].inSituStatus, 'Pendiente Evaluación');
+  assert.equal(members[1].inSituWarning, 'Ev. In Situ pendiente');
+  assert.equal(members[2].auditorNombre, 'Yurima Carrillo (YC · C.I. 12310919)');
+  assert.equal(members[2].inSituStatus, 'Vencido');
+  assert.equal(members[2].inSituWarning, 'Ev. In Situ vencida');
+
+  assert.equal(detailUncovered.observacionSectoresAlerts.length, 1);
+  assert.equal(detailUncovered.observacionSectoresAlerts[0].coveredByExperto, false);
+
+  // Assign Dra. Sofía Quintero (covers 13.2 / Sector 13) -> flips coveredByExperto to true
+  const detailCovered = buildAuditAuditorDetail({
+    activeAudit: auditSec13,
+    audits: [auditSec13],
+    programs: [prog],
+    temporalSites: [],
+    auditors: [yurima1, yurima2, nelson],
+    certificados: certs,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    auditExpertAssignments: [
+      {
+        id: '1e300000-0000-0000-0000-000000000401',
+        id_auditoria: auditSec13Id,
+        id_experto_tecnico: INITIAL_EXPERTOS_TECNICOS[0].id,
+        experto_nombre: INITIAL_EXPERTOS_TECNICOS[0].nombre,
+        experto_estatus: 'Disponible',
+        dias_asignados: 0.5,
+        observacion: 'Acompañamiento Sector 13',
+        deleted_at: null,
+      },
+    ],
+  });
+
+  assert.equal(detailCovered.observacionSectoresAlerts.length, 1);
+  assert.equal(detailCovered.observacionSectoresAlerts[0].coveredByExperto, true);
+  assert.equal(
+    detailCovered.observacionSectoresAlerts[0].coveringExpertNames.includes(
+      INITIAL_EXPERTOS_TECNICOS[0].nombre
+    ),
+    true
+  );
+
+  // Non-intersecting sector (Sector 17) must NOT trigger Sector 13 alert
+  const auditSec17 = makeAudit({
+    id: '80000000-0000-0000-0000-000000000402',
+    id_programa_auditoria: progId,
+    id_certificado: '40000000-0000-0000-0000-000000000402',
+    sector_iaf: 17,
+    sitiosPlan: [
+      makeSitePlan('82000000-0000-0000-0000-000000000402', '80000000-0000-0000-0000-000000000402', 0, 'Planta 17', 1.0, [
+        { idAuditor: nelsonId, nombre: 'Nelson Rafael Arteaga Quevedo', rol: 'AUDITOR_LIDER', days: 1.0 },
+      ]),
+    ],
+  });
+  const detailSec17 = buildAuditAuditorDetail({
+    activeAudit: auditSec17,
+    audits: [auditSec17],
+    programs: [makeProgram(progId, 'Lote 17', [auditSec17])],
+    temporalSites: [],
+    auditors: [nelson],
+    certificados: [],
+    expertos: [],
+  });
+  assert.equal(detailSec17.observacionSectoresAlerts.length, 0);
+});
+
+

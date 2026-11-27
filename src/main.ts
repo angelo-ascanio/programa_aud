@@ -796,6 +796,7 @@ import {
   createEmptyCompetenciaFormDraft,
   createEmptyEvaluacionInSituDraft,
   enrichAuditorsWithHistorial,
+  formatAuditorDisplayLabel,
   getCredentialValidityState,
   getPrimaryAuditorEmail,
   getPrimaryAuditorTelefono,
@@ -32484,9 +32485,12 @@ function resolveUuidDisplayLabel(idVal: string): string {
     return formatAuditCodename(matchedAudit);
   }
 
-  const matchedAuditor =
-    state.domainData.allAuditorsDetailed.find((a) => a.id === idVal) ||
-    state.domainData.auditors.find((a) => a.id === idVal);
+  const matchedDetailedAuditor = state.domainData.allAuditorsDetailed.find(
+    (a) => a.id === idVal
+  );
+  if (matchedDetailedAuditor) return formatAuditorDisplayLabel(matchedDetailedAuditor);
+
+  const matchedAuditor = state.domainData.auditors.find((a) => a.id === idVal);
   if (matchedAuditor) return matchedAuditor.nombre;
 
   const matchedExperto = state.domainData.allExpertosTecnicos.find((e) => e.id === idVal);
@@ -37220,6 +37224,14 @@ async function loadDomainData(): Promise<void> {
       state.domainData.allAuditorsDetailed = [];
       state.domainData.auditors = [];
     }
+    if (state.domainData.auditPrograms.length > 0) {
+      state.domainData.auditAlerts = computeAuditAlerts(
+        state.domainData.auditPrograms,
+        state.domainData.auditAlertConfig,
+        undefined,
+        state.domainData.allAuditorsDetailed
+      );
+    }
 
     // Hydrate Expertos Técnicos (experto_tecnico + 1:N contacto + IAF-only competencies + historial)
     if (state.profile?.role === 'CLIENT') {
@@ -38267,7 +38279,12 @@ async function loadLiveAudits(): Promise<void> {
           state.domainData.allCertificadosDetailed,
           seededPrograms
         );
-        state.domainData.auditAlerts = computeAuditAlerts(seededPrograms, resolvedAlertConfig);
+        state.domainData.auditAlerts = computeAuditAlerts(
+          seededPrograms,
+          resolvedAlertConfig,
+          undefined,
+          state.domainData.allAuditorsDetailed
+        );
       } else {
         state.domainData.auditPrograms = [];
         state.domainData.programacionAudits = [];
@@ -38801,7 +38818,9 @@ async function loadLiveAudits(): Promise<void> {
     );
     state.domainData.auditAlerts = computeAuditAlerts(
       state.domainData.auditPrograms,
-      resolvedAlertConfig
+      resolvedAlertConfig,
+      undefined,
+      state.domainData.allAuditorsDetailed
     );
   } catch (err) {
     console.warn('Error hydrating live audits:', err);
@@ -38891,7 +38910,9 @@ function recomputeLocalAuditPlanningDerivedState(): void {
   );
   state.domainData.auditAlerts = computeAuditAlerts(
     state.domainData.auditPrograms,
-    state.domainData.auditAlertConfig
+    state.domainData.auditAlertConfig,
+    undefined,
+    state.domainData.allAuditorsDetailed
   );
 }
 
@@ -47530,7 +47551,9 @@ export async function saveAlertConfigSettings(
     state.domainData.auditAlertConfig = nextConfig;
     state.domainData.auditAlerts = computeAuditAlerts(
       state.domainData.auditPrograms,
-      nextConfig
+      nextConfig,
+      undefined,
+      state.domainData.allAuditorsDetailed
     );
     resyncLocalOpenNcDeadlines(nextConfig);
 

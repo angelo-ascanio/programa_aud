@@ -38,7 +38,10 @@ import {
   resolveAuditorInSituFacetBucket,
   buildAuditorSearchableText,
   sortEvaluacionesInSituChronological,
+  formatAuditorDisplayLabel,
   formatAuditorSelectorLabel,
+  detectDuplicateAuditorNames,
+  deriveAuditorHistorialFromAudits,
   enrichAuditorsWithHistorial,
   type AuditorDetailEntity,
   type CompetenciaAuditorEntity,
@@ -1588,6 +1591,113 @@ describe('Step 3.2 - Auditor Detail View (3 Zones, 4 Child Tabs, Archive/Restore
     assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
   });
 });
+
+describe('Step 4.1 - Homonym Display Labels & Live Multi-Site Historial Sync', () => {
+  it('formats disambiguated labels via formatAuditorDisplayLabel with options and detects homonyms', () => {
+    const yc1 = {
+      id: '10000000-0000-0000-0000-000000000045',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '7137643',
+    };
+    const yc2 = {
+      id: '10000000-0000-0000-0000-000000000047',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '12310919',
+    };
+
+    assert.equal(formatAuditorDisplayLabel(yc1), 'Yurima Carrillo (YC · C.I. 7137643)');
+    assert.equal(formatAuditorDisplayLabel(yc2), 'Yurima Carrillo (YC · C.I. 12310919)');
+    assert.equal(
+      formatAuditorDisplayLabel(yc1, { includeSiglas: false }),
+      'Yurima Carrillo (C.I. 7137643)'
+    );
+    assert.equal(
+      formatAuditorDisplayLabel(yc1, { includeCedula: false }),
+      'Yurima Carrillo (YC)'
+    );
+    assert.equal(formatAuditorDisplayLabel({ nombre: 'Sin Metadatos' }), 'Sin Metadatos');
+
+    const dups = detectDuplicateAuditorNames([
+      yc1,
+      yc2,
+      { nombre: 'Keyla Soteldo' },
+    ]);
+    assert.equal(dups.has('yurima carrillo'), true);
+    assert.equal(dups.has('keyla soteldo'), false);
+  });
+
+  it('derives deduplicated historial from sitiosPlan[].equipoSitio, preserves Auditor Líder precedence, and drops removed live audits', () => {
+    const baseTemplate = INITIAL_AUDITORES_DETAILED[0];
+    const audLeadId = '10000000-0000-0000-0000-000000000045';
+    const audRemovedId = '10000000-0000-0000-0000-000000000047';
+
+    const liveAudit = {
+      id: '80000000-0000-0000-0000-000000000401',
+      codigo_auditoria: 'AUD-2026-401',
+      organizacion_nombre: 'Farmacéutica Caracas C.A.',
+      numero_certificado: 'FN-QMS-2026-401',
+      norma_codigo: 'ISO 9001:2015',
+      tipo_auditoria: 'Seguimiento 1',
+      metodologia: 'Presencial',
+      fecha_inicio: '2026-10-12',
+      estatus: 'Planificada',
+      auditor_lider_id: '',
+      equipo: [],
+      sitiosPlan: [
+        {
+          deleted_at: null,
+          equipoSitio: [
+            { id_auditor: audLeadId, rol_auditor: 'AUDITOR', deleted_at: null },
+            { id_auditor: audRemovedId, rol_auditor: 'AUDITOR', deleted_at: '2026-10-01T00:00:00Z' },
+          ],
+        },
+        {
+          deleted_at: null,
+          equipoSitio: [
+            { id_auditor: audLeadId, rol_auditor: 'AUDITOR_LIDER', deleted_at: null },
+          ],
+        },
+      ],
+    };
+
+    const derived = deriveAuditorHistorialFromAudits([liveAudit]);
+    assert.equal(derived.get(audLeadId)?.length, 1);
+    assert.equal(derived.get(audLeadId)?.[0].rol_en_auditoria, 'Auditor Líder');
+    assert.equal(derived.get(audRemovedId), undefined);
+
+    const auditorsInput: AuditorDetailEntity[] = [
+      { ...baseTemplate, id: audLeadId, historialAuditorias: [] },
+      {
+        ...baseTemplate,
+        id: audRemovedId,
+        historialAuditorias: [
+          {
+            id: '80000000-0000-0000-0000-000000000401',
+            id_auditor: audRemovedId,
+            codigo_auditoria: 'AUD-2026-401',
+            organizacion_nombre: 'Farmacéutica Caracas C.A.',
+            numero_certificado: 'FN-QMS-2026-401',
+            norma_codigo: 'ISO 9001:2015',
+            tipo_auditoria: 'Seguimiento 1',
+            metodologia: 'Presencial',
+            rol_en_auditoria: 'Auditor de Equipo',
+            fecha_ejecucion: '2026-10-12',
+            estatus: 'Planificada',
+          },
+        ],
+      },
+    ];
+
+    const enriched = enrichAuditorsWithHistorial(auditorsInput, [liveAudit]);
+    assert.equal(enriched[0].historialAuditorias.length, 1);
+    assert.equal(enriched[0].historialAuditorias[0].codigo_auditoria, 'AUD-2026-401');
+    // Unassigned auditor must have live audit removed cleanly instead of sticking around stale
+    assert.equal(enriched[1].historialAuditorias.length, 0);
+  });
+});
+
 
 
 

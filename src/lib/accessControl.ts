@@ -41,6 +41,27 @@ export function canEditAuditScheduleOrTeam(
  * - AUDITOR: strictly restricted to audits where they are assigned in equipo_auditor or auditor_lider
  * - CLIENT / PENDING / REJECTED: strictly read-only / denied
  */
+export function isAuditorAssignedToAudit(
+  audit: ProgramacionAuditEntity | null | undefined,
+  auditorId: string | null | undefined
+): boolean {
+  if (!audit || !auditorId) return false;
+  if (audit.auditor_lider_id === auditorId) return true;
+  if (audit.equipo.some((member) => member.id_auditor === auditorId)) return true;
+  if (
+    Array.isArray(audit.sitiosPlan) &&
+    audit.sitiosPlan.some(
+      (site) =>
+        !site.deleted_at &&
+        Array.isArray(site.equipoSitio) &&
+        site.equipoSitio.some((member) => !member.deleted_at && member.id_auditor === auditorId)
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function canMutateAuditExecution(
   audit: ProgramacionAuditEntity | null | undefined,
   profile: UserProfile | null | undefined
@@ -49,10 +70,7 @@ export function canMutateAuditExecution(
   if (!audit) return false;
   if (profile.role === 'ADMIN' || profile.role === 'WORKER') return true;
   if (profile.role === 'AUDITOR') {
-    return (
-      audit.auditor_lider_id === profile.id ||
-      audit.equipo.some((member) => member.id_auditor === profile.id)
-    );
+    return isAuditorAssignedToAudit(audit, profile.id);
   }
   return false;
 }
@@ -107,11 +125,7 @@ export function scopeProgramacionAuditsForProfile(
   if (isApprovedStaffProfile(profile)) return audits;
 
   if (profile.role === 'AUDITOR') {
-    return audits.filter(
-      (a) =>
-        a.auditor_lider_id === profile.id ||
-        a.equipo.some((member) => member.id_auditor === profile.id)
-    );
+    return audits.filter((a) => isAuditorAssignedToAudit(a, profile.id));
   }
 
   if (profile.role === 'CLIENT') {

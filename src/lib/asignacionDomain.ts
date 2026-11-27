@@ -21,7 +21,17 @@ import type {
   ExpertoTecnicoAuditoriaEntity,
   ProgramacionAuditEntity,
 } from './auditExecution';
-import type { AuditorDetailEntity } from './competencyMatrix';
+import {
+  classifyAuditorObservacionSector,
+  detectDuplicateAuditorNames,
+  evaluateAuditorInSituStatus,
+  formatAuditorDisplayLabel,
+  getAuditorInSituStatusVisual,
+  type AuditorDetailEntity,
+  type AuditorInSituStatus,
+} from './competencyMatrix';
+
+export { formatAuditorDisplayLabel, detectDuplicateAuditorNames };
 import type {
   ExpertoDisponibilidad,
   ExpertoTecnicoDetailEntity,
@@ -105,6 +115,24 @@ export interface AuditAuditorMemberItem {
   scheduleConflictMessages: string[];
   hasRotationWarning: boolean;
   rotationWarningMessage: string | null;
+  inSituStatus?: AuditorInSituStatus;
+  inSituWarning?: string | null;
+  inSituBadgeClass?: string;
+  observacionSectorWarning?: {
+    intersectedSectors: number[];
+    rawText: string;
+    coveredByExperto: boolean;
+    coveringExpertNames: string[];
+  } | null;
+}
+
+export interface AuditObservacionSectorAlert {
+  auditorId: string;
+  auditorNombre: string;
+  intersectedSectors: number[];
+  rawText: string;
+  coveredByExperto: boolean;
+  coveringExpertNames: string[];
 }
 
 export interface AuditAuditableUnit {
@@ -220,6 +248,7 @@ export interface AuditAuditorDetailModel {
   assignedSummaries: AssignedAuditorSummaryItem[];
   scopeIafRequirements: AuditScopeIafRequirement[];
   iafGapStatus: AuditIafGapStatus;
+  observacionSectoresAlerts: AuditObservacionSectorAlert[];
   assignedExpertos: AssignedExpertoAuditoriaItem[];
   rankedEligibleExpertos: RankedExpertoOption[];
 }
@@ -907,6 +936,69 @@ export function buildAuditAuditorDetail(opts: {
 
   const resolvedSectorIaf = Number(cert?.sector_iaf ?? activeAudit.sector_iaf ?? 0);
 
+  const scopeIafRequirements = collectAuditScopeIafRequirements(
+    activeAudit,
+    audits,
+    programs,
+    certificados
+  );
+  const expertoById = new Map(expertos.map((e) => [e.id, e]));
+  const rawExpertAssignments = (
+    auditExpertAssignments ??
+    activeAudit.expertoTecnicoAsignaciones ??
+    []
+  ).filter((item) => !item.deleted_at);
+
+  const activeAuditReq: AuditScopeIafRequirement | null =
+    Number.isFinite(resolvedSectorIaf) && resolvedSectorIaf > 0
+      ? {
+          sectorIaf: resolvedSectorIaf,
+          subsectorCodigo,
+          normaCodigos: activeAudit.norma_codigo ? [activeAudit.norma_codigo] : [],
+          certNumbers: activeAudit.numero_certificado ? [activeAudit.numero_certificado] : [],
+        }
+      : null;
+
+  const assignedExpertos: AssignedExpertoAuditoriaItem[] = rawExpertAssignments.map((item) => {
+    const expObj = expertoById.get(item.id_experto_tecnico);
+    const cov = expObj
+      ? evaluateExpertoScopeCoverage(expObj, scopeIafRequirements)
+      : {
+          coverageTier: 'NONE' as const,
+          coveredIafLabels: [],
+          coversAnyRequirement: false,
+        };
+    const activeAuditCovMatch =
+      expObj && activeAuditReq
+        ? evaluateExpertoCoverageForRequirement(expObj, activeAuditReq)
+        : 'NONE';
+    const coversActiveAuditGap = activeAuditReq
+      ? activeAuditCovMatch === 'EXACT_SUBSECTOR' || activeAuditCovMatch === 'FULL_SECTOR'
+      : cov.coversAnyRequirement;
+    return {
+      id: item.id,
+      id_auditoria: item.id_auditoria,
+      id_experto_tecnico: item.id_experto_tecnico,
+      experto_nombre: item.experto_nombre || expObj?.nombre || 'Experto Técnico',
+      experto_estatus: item.experto_estatus || expObj?.estatus || 'Disponible',
+      dias_asignados: roundAuditDaysQuarter(item.dias_asignados),
+      observacion: item.observacion ?? null,
+      coveredIafLabels: cov.coveredIafLabels,
+      coversScopeGap: coversActiveAuditGap,
+    };
+  });
+
+  const targetAuditSectors = new Set<number>();
+  if (Number.isFinite(resolvedSectorIaf) && resolvedSectorIaf > 0) {
+    targetAuditSectors.add(resolvedSectorIaf);
+  }
+  for (const req of scopeIafRequirements) {
+    if (Number.isFinite(req.sectorIaf) && req.sectorIaf > 0) {
+      targetAuditSectors.add(req.sectorIaf);
+    }
+  }
+  const observacionAlertsMap = new Map<string, AuditObservacionSectorAlert>();
+
   const buildMember = (m: {
     id: string;
     id_auditor: string;
@@ -916,6 +1008,9 @@ export function buildAuditAuditorDetail(opts: {
     asignacion_completa_sitio?: boolean;
   }): AuditAuditorMemberItem => {
     const audObj = auditorById.get(m.id_auditor);
+    const resolvedMemberName = audObj
+      ? formatAuditorDisplayLabel(audObj)
+      : m.auditor_nombre || 'Auditor Calificado';
     const competency = audObj
       ? evaluateAuditorCompetencyMatch(
           audObj,
@@ -946,6 +1041,70 @@ export function buildAuditAuditorDetail(opts: {
       hasRotationWarning = true;
     }
 
+    const inSituStatus = audObj ? evaluateAuditorInSituStatus(audObj) : undefined;
+    const inSituVisual = inSituStatus ? getAuditorInSituStatusVisual(inSituStatus) : undefined;
+    const inSituWarning =
+      inSituStatus === 'Vencido'
+        ? 'Ev. In Situ vencida'
+        : inSituStatus === 'S/R'
+        ? 'Ev. In Situ S/R'
+        : inSituStatus === 'Pendiente Evaluación'
+        ? 'Ev. In Situ pendiente'
+        : inSituStatus === 'Condicionado'
+        ? 'Ev. In Situ condicionada'
+        : null;
+
+    let observacionSectorWarning: AuditAuditorMemberItem['observacionSectorWarning'] = null;
+    if (audObj && targetAuditSectors.size > 0) {
+      const obsClass = classifyAuditorObservacionSector(audObj);
+      if (obsClass.requiereExpertoTecnico) {
+        const intersectedSectors =
+          obsClass.sectoresCondicionados.length > 0
+            ? obsClass.sectoresCondicionados.filter((sec) => targetAuditSectors.has(sec))
+            : Array.from(targetAuditSectors).sort((a, b) => a - b);
+
+        if (intersectedSectors.length > 0) {
+          const coveringExpertNames = assignedExpertos
+            .filter((assigned) => {
+              const expObj = expertoById.get(assigned.id_experto_tecnico);
+              if (!expObj) return assigned.coversScopeGap;
+              return intersectedSectors.some((sec) => {
+                const reqsForSec = scopeIafRequirements.filter((r) => r.sectorIaf === sec);
+                if (reqsForSec.length > 0) {
+                  return reqsForSec.some((req) => {
+                    const covMatch = evaluateExpertoCoverageForRequirement(expObj, req);
+                    return covMatch === 'EXACT_SUBSECTOR' || covMatch === 'FULL_SECTOR';
+                  });
+                }
+                return (
+                  expObj.sectorLinks.some((s) => s.sector_numero === sec) ||
+                  expObj.subsectorLinks.some((sub) => sub.sector_numero === sec)
+                );
+              });
+            })
+            .map((e) => e.experto_nombre);
+
+          const coveredByExperto = coveringExpertNames.length > 0;
+          observacionSectorWarning = {
+            intersectedSectors,
+            rawText: obsClass.textoAlerta,
+            coveredByExperto,
+            coveringExpertNames,
+          };
+          if (!observacionAlertsMap.has(m.id_auditor)) {
+            observacionAlertsMap.set(m.id_auditor, {
+              auditorId: m.id_auditor,
+              auditorNombre: resolvedMemberName,
+              intersectedSectors,
+              rawText: obsClass.textoAlerta,
+              coveredByExperto,
+              coveringExpertNames,
+            });
+          }
+        }
+      }
+    }
+
     const existing = auditorMap.get(m.id_auditor);
     if (existing) {
       existing.totalDays = roundAuditDaysQuarter(existing.totalDays + m.tiempo_auditoria);
@@ -953,7 +1112,7 @@ export function buildAuditAuditorDetail(opts: {
     } else {
       auditorMap.set(m.id_auditor, {
         auditorId: m.id_auditor,
-        nombre: m.auditor_nombre || audObj?.nombre || 'Auditor Calificado',
+        nombre: resolvedMemberName,
         isLeader,
         totalDays: roundAuditDaysQuarter(m.tiempo_auditoria),
       });
@@ -962,7 +1121,7 @@ export function buildAuditAuditorDetail(opts: {
     return {
       assignmentId: m.id,
       auditorId: m.id_auditor,
-      auditorNombre: m.auditor_nombre || audObj?.nombre || 'Auditor Calificado',
+      auditorNombre: resolvedMemberName,
       rol: m.rol_auditor,
       days: roundAuditDaysQuarter(m.tiempo_auditoria),
       wholeSite: m.asignacion_completa_sitio ?? true,
@@ -971,6 +1130,10 @@ export function buildAuditAuditorDetail(opts: {
       scheduleConflictMessages: memberConflicts.map((c) => c.message),
       hasRotationWarning: hasMemberRotation,
       rotationWarningMessage: hasMemberRotation ? rotationSummary.warningMessage : null,
+      inSituStatus,
+      inSituWarning,
+      inSituBadgeClass: inSituVisual?.badgeClass,
+      observacionSectorWarning,
     };
   };
 
@@ -1124,58 +1287,6 @@ export function buildAuditAuditorDetail(opts: {
     alertReasons.push('Exceso de días asignados en sitio');
   }
 
-  const scopeIafRequirements = collectAuditScopeIafRequirements(
-    activeAudit,
-    audits,
-    programs,
-    certificados
-  );
-  const expertoById = new Map(expertos.map((e) => [e.id, e]));
-  const rawExpertAssignments = (
-    auditExpertAssignments ??
-    activeAudit.expertoTecnicoAsignaciones ??
-    []
-  ).filter((item) => !item.deleted_at);
-
-  const activeAuditReq: AuditScopeIafRequirement | null =
-    Number.isFinite(resolvedSectorIaf) && resolvedSectorIaf > 0
-      ? {
-          sectorIaf: resolvedSectorIaf,
-          subsectorCodigo,
-          normaCodigos: activeAudit.norma_codigo ? [activeAudit.norma_codigo] : [],
-          certNumbers: activeAudit.numero_certificado ? [activeAudit.numero_certificado] : [],
-        }
-      : null;
-
-  const assignedExpertos: AssignedExpertoAuditoriaItem[] = rawExpertAssignments.map((item) => {
-    const expObj = expertoById.get(item.id_experto_tecnico);
-    const cov = expObj
-      ? evaluateExpertoScopeCoverage(expObj, scopeIafRequirements)
-      : {
-          coverageTier: 'NONE' as const,
-          coveredIafLabels: [],
-          coversAnyRequirement: false,
-        };
-    const activeAuditCovMatch =
-      expObj && activeAuditReq
-        ? evaluateExpertoCoverageForRequirement(expObj, activeAuditReq)
-        : 'NONE';
-    const coversActiveAuditGap = activeAuditReq
-      ? activeAuditCovMatch === 'EXACT_SUBSECTOR' || activeAuditCovMatch === 'FULL_SECTOR'
-      : cov.coversAnyRequirement;
-    return {
-      id: item.id,
-      id_auditoria: item.id_auditoria,
-      id_experto_tecnico: item.id_experto_tecnico,
-      experto_nombre: item.experto_nombre || expObj?.nombre || 'Experto Técnico',
-      experto_estatus: item.experto_estatus || expObj?.estatus || 'Disponible',
-      dias_asignados: roundAuditDaysQuarter(item.dias_asignados),
-      observacion: item.observacion ?? null,
-      coveredIafLabels: cov.coveredIafLabels,
-      coversScopeGap: coversActiveAuditGap,
-    };
-  });
-
   const assignedExpertoIds = new Set(assignedExpertos.map((e) => e.id_experto_tecnico));
   const rankedEligibleExpertos = rankEligibleExpertosForAudit({
     expertos,
@@ -1222,6 +1333,7 @@ export function buildAuditAuditorDetail(opts: {
     assignedSummaries,
     scopeIafRequirements,
     iafGapStatus,
+    observacionSectoresAlerts: Array.from(observacionAlertsMap.values()),
     assignedExpertos,
     rankedEligibleExpertos,
   };

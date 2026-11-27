@@ -1435,16 +1435,50 @@ export function sortEvaluacionesInSituChronological(
     });
 }
 
+export interface FormatAuditorDisplayLabelOptions {
+  includeSiglas?: boolean;
+  includeCedula?: boolean;
+}
+
+export function formatAuditorDisplayLabel(
+  auditor: Pick<AuditorDetailEntity, 'nombre'> &
+    Partial<Pick<AuditorDetailEntity, 'siglas' | 'codigo_credencial' | 'cedula_identidad'>>,
+  options: FormatAuditorDisplayLabelOptions = {}
+): string {
+  const nombre = (auditor.nombre || '').trim() || 'Auditor';
+  const includeSiglas = options.includeSiglas !== false;
+  const includeCedula = options.includeCedula !== false;
+  const siglas = includeSiglas
+    ? (auditor.siglas || auditor.codigo_credencial || '').trim()
+    : '';
+  const cedula = includeCedula ? (auditor.cedula_identidad || '').trim() : '';
+  const metaParts: string[] = [];
+  if (siglas) metaParts.push(siglas);
+  if (cedula) metaParts.push(`C.I. ${cedula}`);
+  return metaParts.length > 0 ? `${nombre} (${metaParts.join(' · ')})` : nombre;
+}
+
 export function formatAuditorSelectorLabel(
   auditor: Pick<AuditorDetailEntity, 'nombre'> &
     Partial<Pick<AuditorDetailEntity, 'siglas' | 'codigo_credencial' | 'cedula_identidad'>>
 ): string {
-  const siglas = (auditor.siglas || auditor.codigo_credencial || '').trim();
-  const cedula = (auditor.cedula_identidad || '').trim();
-  const metaParts: string[] = [];
-  if (siglas) metaParts.push(siglas);
-  if (cedula) metaParts.push(`C.I. ${cedula}`);
-  return metaParts.length > 0 ? `${auditor.nombre} (${metaParts.join(' · ')})` : auditor.nombre;
+  return formatAuditorDisplayLabel(auditor);
+}
+
+export function detectDuplicateAuditorNames(
+  auditors: ReadonlyArray<Pick<AuditorDetailEntity, 'nombre'>>
+): Set<string> {
+  const counts = new Map<string, number>();
+  for (const aud of auditors) {
+    const norm = normalizeText(aud?.nombre);
+    if (!norm) continue;
+    counts.set(norm, (counts.get(norm) ?? 0) + 1);
+  }
+  const duplicates = new Set<string>();
+  for (const [name, count] of counts.entries()) {
+    if (count > 1) duplicates.add(name);
+  }
+  return duplicates;
 }
 
 export function evaluateAuditorInSituStatus(
@@ -2684,6 +2718,14 @@ export interface AuditorAuditHistorialSource {
     id_auditor?: string | null;
     rol?: string | null;
   }>;
+  sitiosPlan?: ReadonlyArray<{
+    deleted_at?: string | null;
+    equipoSitio?: ReadonlyArray<{
+      id_auditor?: string | null;
+      rol_auditor?: string | null;
+      deleted_at?: string | null;
+    }>;
+  }>;
   deleted_at?: string | null;
 }
 
@@ -2706,6 +2748,12 @@ function normalizeHistorialEstatus(
   return 'Planificada';
 }
 
+function mapSiteRoleToHistorialLabel(rolAuditor: string | null | undefined): string {
+  if (rolAuditor === 'AUDITOR_LIDER') return 'Auditor Líder';
+  if (rolAuditor === 'EXPERTO_TECNICO') return 'Experto Técnico';
+  return 'Auditor de Equipo';
+}
+
 export function deriveAuditorHistorialFromAudits(
   audits: ReadonlyArray<AuditorAuditHistorialSource>
 ): Map<string, AuditoriaRealizadaEntity[]> {
@@ -2720,7 +2768,24 @@ export function deriveAuditorHistorialFromAudits(
         const memberId = (member?.id_auditor || '').trim();
         if (!memberId) continue;
         const roleLabel = (member?.rol || '').trim() || 'Auditor de Equipo';
-        rolesByAuditor.set(memberId, roleLabel);
+        if (rolesByAuditor.get(memberId) !== 'Auditor Líder') {
+          rolesByAuditor.set(memberId, roleLabel);
+        }
+      }
+    }
+
+    if (Array.isArray(audit.sitiosPlan)) {
+      for (const site of audit.sitiosPlan) {
+        if (!site || site.deleted_at || !Array.isArray(site.equipoSitio)) continue;
+        for (const member of site.equipoSitio) {
+          if (!member || member.deleted_at) continue;
+          const memberId = (member.id_auditor || '').trim();
+          if (!memberId) continue;
+          const roleLabel = mapSiteRoleToHistorialLabel(member.rol_auditor);
+          if (rolesByAuditor.get(memberId) !== 'Auditor Líder') {
+            rolesByAuditor.set(memberId, roleLabel);
+          }
+        }
       }
     }
 
@@ -2780,12 +2845,28 @@ export function enrichAuditorsWithHistorial(
   audits: ReadonlyArray<AuditorAuditHistorialSource>
 ): AuditorDetailEntity[] {
   const derivedByAuditor = deriveAuditorHistorialFromAudits(audits);
+  const liveAuditIds = new Set<string>();
+  const liveAuditCodes = new Set<string>();
+  for (const audit of audits) {
+    if (!audit) continue;
+    if (audit.id) liveAuditIds.add(audit.id);
+    if (audit.codigo_auditoria) liveAuditCodes.add(audit.codigo_auditoria.trim().toLowerCase());
+  }
+
   return auditors.map((auditor) => {
     const derived = derivedByAuditor.get(auditor.id) || [];
     const existing = Array.isArray(auditor.historialAuditorias)
       ? auditor.historialAuditorias
       : [];
-    if (derived.length === 0) {
+    const preservedStatic = existing.filter((item) => {
+      if (item.id && liveAuditIds.has(item.id)) return false;
+      if (item.codigo_auditoria && liveAuditCodes.has(item.codigo_auditoria.trim().toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+
+    if (derived.length === 0 && preservedStatic.length === existing.length) {
       return auditor;
     }
 
@@ -2797,7 +2878,7 @@ export function enrichAuditorsWithHistorial(
         seenCodes.add(item.codigo_auditoria.toLowerCase());
       }
     }
-    for (const item of existing) {
+    for (const item of preservedStatic) {
       if (mergedById.has(item.id)) continue;
       if (item.codigo_auditoria && seenCodes.has(item.codigo_auditoria.toLowerCase())) {
         continue;

@@ -256,7 +256,8 @@ export type CalendarioAlertCategoryFilter =
   | 'PROXIMA'
   | 'PREPROGRAMADA_SIN_CONFIRMAR'
   | 'CONFLICTO_AUDITOR'
-  | 'DESFASE_DIAS_SPAN';
+  | 'DESFASE_DIAS_SPAN'
+  | 'AUDITOR_IN_SITU';
 
 export interface CalendarioAlertConfigDraft {
   dias_aviso_proxima: string;

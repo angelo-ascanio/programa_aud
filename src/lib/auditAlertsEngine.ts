@@ -13,6 +13,11 @@
 import type { ProgramacionAuditEntity } from './auditExecution';
 import type { ProcessEntity } from './multisiteSampling';
 import {
+  evaluateAuditorInSituStatus,
+  formatAuditorDisplayLabel,
+  type AuditorDetailEntity,
+} from './competencyMatrix';
+import {
   computeAuditDayBalance,
   formatAuditDateLabel,
   resolveAuditCycleStatus,
@@ -464,7 +469,8 @@ export type AuditAlertCategory =
   | 'PROXIMA'
   | 'PREPROGRAMADA_SIN_CONFIRMAR'
   | 'CONFLICTO_AUDITOR'
-  | 'DESFASE_DIAS_SPAN';
+  | 'DESFASE_DIAS_SPAN'
+  | 'AUDITOR_IN_SITU';
 
 export type AuditAlertSeverity = 'rose' | 'amber' | 'sky';
 
@@ -497,9 +503,15 @@ const ALERT_SEVERITY_ORDER: Record<AuditAlertSeverity, number> = {
 export function computeAuditAlerts(
   programs: ReadonlyArray<ProgramaAuditoriaEntity>,
   config: AlertConfigEntity = DEFAULT_AUDIT_ALERT_CONFIG,
-  todayIso?: string
+  todayIso?: string,
+  auditors?: ReadonlyArray<AuditorDetailEntity>
 ): AuditAlertItem[] {
   if (!config.alertas_activas) return [];
+
+  const auditorById =
+    auditors && auditors.length > 0
+      ? new Map(auditors.map((aud) => [aud.id, aud]))
+      : null;
 
   const effectiveToday = getEffectiveTodayIso(todayIso);
   const todayDayNum = toUtcDayNumber(effectiveToday);
@@ -646,6 +658,61 @@ export function computeAuditAlerts(
               organizacionNombre: audit.organizacion_nombre,
             });
           }
+        }
+      }
+
+      // 5. AUDITOR_IN_SITU (non-saturating: max 1 consolidated alert per active audit)
+      if (auditorById) {
+        const assignedAuditorIds = new Set<string>();
+        if (audit.auditor_lider_id && audit.auditor_lider_id.trim()) {
+          assignedAuditorIds.add(audit.auditor_lider_id.trim());
+        }
+        for (const member of audit.equipo || []) {
+          if (member.id_auditor && member.id_auditor.trim()) {
+            assignedAuditorIds.add(member.id_auditor.trim());
+          }
+        }
+        for (const site of audit.sitiosPlan || []) {
+          if (site.deleted_at) continue;
+          for (const member of site.equipoSitio || []) {
+            if (!member.deleted_at && member.id_auditor && member.id_auditor.trim()) {
+              assignedAuditorIds.add(member.id_auditor.trim());
+            }
+          }
+        }
+
+        const flaggedMembers: Array<{ label: string; status: 'Vencido' | 'Por Vencer' }> = [];
+        let hasVencido = false;
+        for (const audId of assignedAuditorIds) {
+          const audObj = auditorById.get(audId);
+          if (!audObj) continue;
+          const status = evaluateAuditorInSituStatus(audObj, effectiveToday);
+          if (status === 'Vencido' || status === 'Por Vencer') {
+            if (status === 'Vencido') hasVencido = true;
+            flaggedMembers.push({
+              label: `${formatAuditorDisplayLabel(audObj)} (${status})`,
+              status,
+            });
+          }
+        }
+
+        if (flaggedMembers.length > 0) {
+          seqCounter += 1;
+          alerts.push({
+            id: `alert-insitu-${seqCounter}`,
+            category: 'AUDITOR_IN_SITU',
+            severity: hasVencido ? 'amber' : 'sky',
+            title: hasVencido
+              ? 'Evaluación In Situ vencida en equipo'
+              : 'Evaluación In Situ por vencer en equipo',
+            message: `${auditLabel} (${audit.organizacion_nombre}): ${flaggedMembers.map((f) => f.label).join(', ')}.`,
+            programId: program.id,
+            programLabel,
+            auditId: audit.id,
+            codigoAuditoria: audit.codigo_auditoria,
+            numeroCertificado: audit.numero_certificado,
+            organizacionNombre: audit.organizacion_nombre,
+          });
         }
       }
     }

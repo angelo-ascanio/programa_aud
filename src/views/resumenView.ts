@@ -5,6 +5,7 @@ import type { OrganizacionEntity } from '../lib/activeCertificates';
 import type { ConglomeradoEntity } from '../lib/conglomeradoDomain';
 import type { VinculoEntity } from '../lib/vinculoDomain';
 import type { Phase5FindingEntity, ProgramacionAuditEntity } from '../lib/auditExecution';
+import type { AuditorDetailEntity } from '../lib/competencyMatrix';
 import type { ProgramaAuditoriaEntity } from '../lib/auditPlanningEngine';
 import {
   getLinkedSiblingAudits,
@@ -94,6 +95,7 @@ export interface ResumenViewRenderProps {
   authorizedClientOrgIds?: ReadonlyArray<string>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
   certificates?: ReadonlyArray<CertificateRecord>;
+  auditors?: ReadonlyArray<AuditorDetailEntity>;
   loading?: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
   inCardBreadcrumbHtml?: string;
@@ -729,6 +731,7 @@ function renderResumenDetailView(opts: {
   temporalSites: ReadonlyArray<AuditoriaSitioTemporalEntity>;
   findings: ReadonlyArray<Phase5FindingEntity>;
   certificados?: ReadonlyArray<CertificadoDetailEntity>;
+  auditors?: ReadonlyArray<AuditorDetailEntity>;
   inCardBreadcrumbHtml: string;
   headerAddAuditHtml: string;
 }): string {
@@ -741,6 +744,7 @@ function renderResumenDetailView(opts: {
     temporalSites,
     findings,
     certificados = [],
+    auditors = [],
     inCardBreadcrumbHtml,
     headerAddAuditHtml,
   } = opts;
@@ -767,6 +771,7 @@ function renderResumenDetailView(opts: {
     temporalSites,
     findings,
     detailedCerts: certificados,
+    auditors,
   });
 
   const bodyHtml = activeAudit

@@ -6,7 +6,7 @@ import {
   INITIAL_CERTIFICADOS_DETAILED,
   type CertificadoDetailEntity,
 } from '../lib/multisiteSampling';
-import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import { formatAuditorDisplayLabel, type AuditorDetailEntity } from '../lib/competencyMatrix';
 import type { OrganizacionEntity } from '../lib/activeCertificates';
 import {
   INITIAL_METODOLOGIAS_CATALOG,
@@ -3906,7 +3906,7 @@ function renderEditAuditAttributesForm(
           ${auditors
             .map(
               (aud) =>
-                `<option value="${escapeHtml(aud.id)}" ${aud.id === audit.auditor_lider_id ? 'selected' : ''}>${escapeHtml(aud.nombre)} (${escapeHtml(aud.normas_acreditadas.join(', '))})</option>`
+                `<option value="${escapeHtml(aud.id)}" ${aud.id === audit.auditor_lider_id ? 'selected' : ''}>${escapeHtml(formatAuditorDisplayLabel(aud))} (${escapeHtml(aud.normas_acreditadas.join(', '))})</option>`
             )
             .join('')}
         </select>
@@ -3977,7 +3977,7 @@ function renderTeamChildTab(
                             : normaMatch
                             ? '⚠️ Solo Norma (Requiere Experto IAF)'
                             : 'ℹ️ Apoyo / Formación';
-                        return `<option value="${escapeHtml(aud.id)}">${escapeHtml(aud.nombre)} — ${badgeText}</option>`;
+                        return `<option value="${escapeHtml(aud.id)}">${escapeHtml(formatAuditorDisplayLabel(aud))} — ${escapeHtml(badgeText)}</option>`;
                       })
                       .join('')}
                   </select>

@@ -5,6 +5,7 @@ import {
   canEditAuditScheduleOrTeam,
   canMutateAuditExecution,
   canViewAuditLogForEntity,
+  computeDashboardSummaryMetrics,
   isApprovedStaffProfile,
   normalizeDomainSubview,
   parseHashRouteString,
@@ -599,6 +600,98 @@ test('ADMIN-only Database Backup & CSV Center route, subview guard, and header m
     assert.equal(nonAdminHeader.includes('Respaldo DB'), false);
   }
 });
+
+test('Step 4.1 Real CSV Auditor Session: site-level assignment in sitiosPlan scopes audits, execution writes, and Dashboard metrics', () => {
+  const keylaProfile: UserProfile = {
+    id: '10000000-0000-0000-0000-000000000001',
+    nombre: 'Keyla Soteldo',
+    role: 'AUDITOR',
+    status: 'APPROVED',
+    created_at: '2025-01-01T00:00:00Z',
+  };
+
+  const siteAssignedAudit: ProgramacionAuditEntity = {
+    ...INITIAL_PROGRAMACION_AUDITS[0],
+    id: '80000000-0000-0000-0000-000000000501',
+    codigo_auditoria: 'AUD-2026-501',
+    auditor_lider_id: '10000000-0000-0000-0000-000000000002',
+    auditor_lider: 'Leonardo Rojas',
+    equipo: [],
+    sitiosPlan: [
+      {
+        id: '51000000-0000-0000-0000-000000000501',
+        id_auditoria: '80000000-0000-0000-0000-000000000501',
+        id_sitio: '50000000-0000-0000-0000-000000000501',
+        numero_sitio: 0,
+        nombre_sitio: 'Planta Central',
+        tiempo_auditoria: 2.0,
+        modalidad_evaluacion: 'Presencial',
+        procesos: [],
+        equipoSitio: [
+          {
+            id: 'e1000000-0000-0000-0000-000000000501',
+            id_sitios_por_auditoria: '51000000-0000-0000-0000-000000000501',
+            id_auditor: keylaProfile.id,
+            auditor_nombre: 'Keyla Soteldo',
+            rol_auditor: 'AUDITOR',
+            tiempo_auditoria: 1.0,
+            deleted_at: null,
+          },
+        ],
+        deleted_at: null,
+      },
+    ],
+  };
+
+  const unassignedAudit: ProgramacionAuditEntity = {
+    ...INITIAL_PROGRAMACION_AUDITS[1],
+    id: '80000000-0000-0000-0000-000000000502',
+    codigo_auditoria: 'AUD-2026-502',
+    auditor_lider_id: '10000000-0000-0000-0000-000000000002',
+    equipo: [],
+    sitiosPlan: [],
+  };
+
+  const scopedAudits = scopeProgramacionAuditsForProfile(
+    [siteAssignedAudit, unassignedAudit],
+    keylaProfile,
+    []
+  );
+  assert.equal(scopedAudits.length, 1);
+  assert.equal(scopedAudits[0].id, siteAssignedAudit.id);
+  assert.equal(canMutateAuditExecution(siteAssignedAudit, keylaProfile), true);
+  assert.equal(canMutateAuditExecution(unassignedAudit, keylaProfile), false);
+
+  const scopedOrgs = scopeOrganizacionEntitiesForProfile(
+    INITIAL_ORGANIZACIONES,
+    keylaProfile,
+    [],
+    scopedAudits
+  );
+  const scopedCerts = scopeDetailedCertsForProfile(
+    INITIAL_CERTIFICADOS_DETAILED,
+    keylaProfile,
+    [],
+    scopedAudits
+  );
+  const scopedFindings = scopePhase5FindingsForProfile(
+    INITIAL_PHASE5_FINDINGS,
+    scopedAudits,
+    keylaProfile
+  );
+  const metrics = computeDashboardSummaryMetrics({
+    profile: keylaProfile,
+    scopedOrganizaciones: scopedOrgs,
+    scopedCertificados: scopedCerts,
+    scopedAuditorias: scopedAudits,
+    acreditaciones: [],
+    scopedHallazgos: scopedFindings,
+  });
+  assert.equal(metrics.auditoriasProgramadas, 1);
+  assert.equal(metrics.organizacionesActivas, scopedOrgs.length);
+  assert.equal(metrics.hallazgosAbiertos, scopedFindings.filter((f) => !f.cerrado && f.estado_ciclo !== 'Cerrado').length);
+});
+
 
 
 

@@ -1,7 +1,7 @@
 import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
-import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import { formatAuditorDisplayLabel, type AuditorDetailEntity } from '../lib/competencyMatrix';
 import {
   formatIsoDateParts,
   getMethodologyVisualStyle,
@@ -754,6 +754,8 @@ function resolveAlertCategoryLabel(category: AuditAlertCategory): string {
       return 'Conflicto';
     case 'DESFASE_DIAS_SPAN':
       return 'Desfase Días/Span';
+    case 'AUDITOR_IN_SITU':
+      return 'Ev. In Situ';
   }
 }
 
@@ -794,6 +796,7 @@ function renderSmartAlertsPanel(params: {
     PREPROGRAMADA_SIN_CONFIRMAR: 0,
     CONFLICTO_AUDITOR: 0,
     DESFASE_DIAS_SPAN: 0,
+    AUDITOR_IN_SITU: 0,
   };
   for (const al of alerts) {
     countsByCategory[al.category] += 1;
@@ -815,6 +818,7 @@ function renderSmartAlertsPanel(params: {
     },
     { id: 'CONFLICTO_AUDITOR', label: 'Conflictos de Auditor', count: countsByCategory.CONFLICTO_AUDITOR },
     { id: 'DESFASE_DIAS_SPAN', label: 'Desfases de Días/Span', count: countsByCategory.DESFASE_DIAS_SPAN },
+    { id: 'AUDITOR_IN_SITU', label: 'Ev. In Situ Equipo', count: countsByCategory.AUDITOR_IN_SITU },
   ];
 
   const toneBorder = !alertConfig.alertas_activas
@@ -997,9 +1001,10 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
   const rawAlerts =
     props.auditAlerts !== undefined
       ? props.auditAlerts
-      : computeAuditAlerts(resolvedPrograms, alertConfig);
+      : computeAuditAlerts(resolvedPrograms, alertConfig, undefined, auditors);
 
   const visibleAlerts = rawAlerts.filter((al) => {
+    if (profile.role === 'CLIENT' && al.category === 'AUDITOR_IN_SITU') return false;
     if (al.programId && !visibleProgramIds.has(al.programId)) return false;
     if (!canConfigureAlerts && al.auditId && !visibleAuditIds.has(al.auditId)) {
       return false;
@@ -1572,9 +1577,11 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
                 temporalSites: props.temporalSites ?? [],
                 findings: props.findings ?? [],
                 detailedCerts: props.certificados ?? [],
+                auditors,
               }),
             drawerEvent?.operationalTargetSubview || 'resumen',
-            props.certificados ?? []
+            props.certificados ?? [],
+            auditors
           )
         : ''
     }
@@ -1833,7 +1840,7 @@ function renderCalendarCanvas(params: {
               ${auditors
                 .map(
                   (a) =>
-                    `<option value="${escapeHtml(a.id)}" ${state.filterAuditorId === a.id ? 'selected' : ''}>${escapeHtml(a.nombre)}</option>`
+                    `<option value="${escapeHtml(a.id)}" ${state.filterAuditorId === a.id ? 'selected' : ''}>${escapeHtml(formatAuditorDisplayLabel(a))}</option>`
                 )
                 .join('')}
             </select>
@@ -2876,7 +2883,8 @@ function renderCalendarEventDrawer(
   audit: ProgramacionAuditEntity,
   statusSummary: AuditStatusSummaryResult,
   operationalTargetSubview: string,
-  certificados: ReadonlyArray<CertificadoDetailEntity> = []
+  certificados: ReadonlyArray<CertificadoDetailEntity> = [],
+  auditors: ReadonlyArray<AuditorDetailEntity> = []
 ): string {
   const mod = getModalityVisualStyle(audit.tipo_auditoria);
   const met = getMethodologyVisualStyle(audit.metodologia);
@@ -3014,11 +3022,13 @@ function renderCalendarEventDrawer(
             </div>
             <div class="space-y-2">
               ${audit.equipo
-                .map(
-                  (m) => `
+                .map((m) => {
+                  const audMatch = auditors.find((a) => a.id === m.id_auditor);
+                  const memberLabel = audMatch ? formatAuditorDisplayLabel(audMatch) : m.nombre;
+                  return `
                   <div class="p-3 rounded-xl border border-slate-200 bg-white space-y-1 text-xs">
                     <div class="flex items-center justify-between gap-2">
-                      <span class="font-bold text-slate-900">${escapeHtml(m.nombre)}</span>
+                      <span class="font-bold text-slate-900">${escapeHtml(memberLabel)}</span>
                       <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
                         ${escapeHtml(m.rol)}
                       </span>
@@ -3031,8 +3041,8 @@ function renderCalendarEventDrawer(
                       ${m.telefono ? `<span>📞 ${escapeHtml(m.telefono)}</span>` : ''}
                     </div>
                   </div>
-                `
-                )
+                `;
+                })
                 .join('')}
             </div>
           </div>
