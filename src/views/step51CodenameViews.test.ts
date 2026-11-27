@@ -50,6 +50,14 @@ import {
 } from './designacionTemporalView';
 import { renderResumenView, DEFAULT_RESUMEN_STATE } from './resumenView';
 import { renderVinculoView, DEFAULT_VINCULO_STATE } from './vinculoView';
+import { renderProcesoView } from './procesoView';
+import { renderTurnoView } from './turnoView';
+import { renderSitioView } from './sitioView';
+import { renderEstatusView } from './estatusView';
+import { renderTipoAuditoriaView } from './tipoAuditoriaView';
+import { renderMetodologiaAuditoriaView } from './metodologiaAuditoriaView';
+import { renderSitioAuditoriaView } from './sitioAuditoriaView';
+import { renderAuditResumenView } from './auditPipelineSummaryViews';
 import { resolveAuditNavigation } from '../lib/certificateAuditSelector';
 
 const ADMIN_PROFILE: UserProfile = {
@@ -670,4 +678,263 @@ test('Step 5.1: Multi View headers use concise Less-Is-More Spanish subtitles an
   });
   assert.ok(vincHtml.includes('Organizaciones, certificados agrupados o LIBRE y cajas por conglomerado.'));
   assertTableInvariants(vincHtml, 'vinculoMulti');
+});
+
+test('Step 5.1: Block 2 Proceso/Turno/Sitio audit tabs & Catalog/Summary views render compact codenames and short org names', () => {
+  const procHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: '61000000-0000-0000-0000-000000000071',
+      activeChildTab: 'auditorias',
+      isEditingAttributes: false,
+    },
+    proceso: {
+      id: '61000000-0000-0000-0000-000000000071',
+      id_certificado: IDs.cert,
+      numero_certificado: TEST_CERT.numero_certificado,
+      certificado_estatus: 'Activo',
+      norma_codigo: 'ISO 9001:2015',
+      id_organizacion: IDs.org,
+      organizacion_nombre: TEST_ORG.nombre,
+      nombre_proceso: 'Laminación en Caliente',
+      tipo: 'Operativo',
+      responsable: 'Ing. Ruiz',
+      sitios: [],
+      requisitos: [],
+      hallazgos: [],
+      auditorias: [
+        {
+          id_auditoria: IDs.audit,
+          codigo_auditoria: TEST_AUDIT.codigo_auditoria,
+          tipo_auditoria: 'Seguimiento 1',
+          metodologia: 'Presencial',
+          fecha_programacion: '2026-09-14',
+          estatus: 'Planificada',
+          id_sitio: IDs.site,
+          numero_sitio: 0,
+          nombre_sitio: 'Planta Principal Norte',
+          id_turno: null,
+          turno_label: 'Diurno',
+        },
+      ],
+    },
+    certificates: [TEST_CERT],
+    programacionAudits: [TEST_AUDIT],
+  });
+  assert.ok(procHtml.includes('2026-09 Seg.1'));
+  assert.ok(procHtml.includes('title="AUD-2026-IND-71'));
+  assertTableInvariants(procHtml, 'procesoAuditoriasTab');
+
+  const turnoHtml = renderTurnoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedTurnoId: '62000000-0000-0000-0000-000000000071',
+      originatingSitioId: null,
+      activeChildTab: 'auditorias',
+      isEditingAttributes: false,
+    },
+    turno: {
+      id: '62000000-0000-0000-0000-000000000071',
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Turno Mañana',
+      durationLabel: '8h 00m',
+      isOvernight: false,
+      deleted_at: null,
+      parentSitio: {
+        id_sitio: IDs.site,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta Principal Norte',
+        id_certificado: IDs.cert,
+        numero_certificado: TEST_CERT.numero_certificado,
+        norma_codigo: 'ISO 9001:2015',
+      },
+      sitios: [],
+      auditorias: [
+        {
+          id_auditoria: IDs.audit,
+          codigo_auditoria: TEST_AUDIT.codigo_auditoria,
+          tipo_auditoria: 'Seguimiento 1',
+          metodologia: 'Presencial',
+          fecha_programacion: '2026-09-14',
+          estatus: 'Planificada',
+          id_sitio: IDs.site,
+          numero_sitio: 0,
+          nombre_sitio: 'Planta Principal Norte',
+          id_certificado: IDs.cert,
+          numero_certificado: TEST_CERT.numero_certificado,
+        },
+      ],
+    },
+    certificates: [TEST_CERT],
+  });
+  assert.ok(turnoHtml.includes('2026-09 Seg.1'));
+  assert.ok(turnoHtml.includes('title="AUD-2026-IND-71'));
+  assertTableInvariants(turnoHtml, 'turnoAuditoriasTab');
+
+  const sitioHtml = renderSitioView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedSitioId: IDs.site,
+      activeChildTab: 'auditorias',
+      isEditingAttributes: false,
+    },
+    sitio: {
+      id: IDs.site,
+      id_certificado: IDs.cert,
+      numero_certificado: TEST_CERT.numero_certificado,
+      multisitio: false,
+      certificado_estatus: 'Activo',
+      norma_codigo: 'ISO 9001:2015',
+      id_organizacion: IDs.org,
+      organizacion_nombre: TEST_ORG.nombre,
+      numero_sitio: 0,
+      nombre_sitio: 'Planta Principal Norte',
+      direccion_sitio: 'Zona Industrial Norte',
+      personal_count: 80,
+      turnos: [],
+      procesos: [],
+      auditorias: [
+        {
+          id: IDs.audit,
+          codigo_auditoria: TEST_AUDIT.codigo_auditoria,
+          fecha_programacion: '2026-09-14',
+          tipo_auditoria: 'Seguimiento 1',
+          metodologia: 'Presencial',
+          estatus: 'Planificada',
+        },
+      ],
+    },
+    certificates: [TEST_CERT],
+    programacionAudits: [TEST_AUDIT],
+  });
+  assert.ok(sitioHtml.includes('2026-09 Seg.1'));
+  assert.ok(sitioHtml.includes('title="AUD-2026-IND-71'));
+  assertTableInvariants(sitioHtml, 'sitioAuditoriasTab');
+
+  const estatusHtml = renderEstatusView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedEstatusId: '12000000-0000-0000-0000-000000000001',
+      activeChildTab: 'auditorias',
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isSidebarOpen: false,
+      isEditingAttributes: false,
+      isCreating: false,
+    },
+    estatusList: [
+      {
+        id: '12000000-0000-0000-0000-000000000001',
+        estatus: 'Planificada',
+        descripcion: 'Auditoría planificada',
+        categoria_aplicable: 'Auditoría',
+        color_token: 'sky',
+        usage_count: 1,
+      },
+    ],
+    certificados: [TEST_CERT],
+    audits: [TEST_AUDIT],
+  });
+  assert.ok(estatusHtml.includes('2026-09 Seg.1'));
+  assert.ok(estatusHtml.includes('AcerosCA'));
+  assertTableInvariants(estatusHtml, 'estatusAuditoriasTab');
+
+  const tipoCatHtml = renderTipoAuditoriaView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedTipoId: IDs.tipo,
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isSidebarOpen: false,
+      isEditingAttributes: false,
+      isCreating: false,
+    },
+    tiposList: [
+      {
+        id: IDs.tipo,
+        tipo: 'Seguimiento 1',
+        abreviacion: 'Seg.1',
+        etapa_ciclo: 'Vigilancia',
+        descripcion: 'Primera auditoría de vigilancia',
+        duracion_formula: '1/3 MD',
+        reporte_requerido: 'Informe Seguimiento',
+        usage_count: 1,
+      },
+    ],
+    audits: [TEST_AUDIT],
+  });
+  assert.ok(tipoCatHtml.includes('2026-09 Seg.1'));
+  assert.ok(tipoCatHtml.includes('AcerosCA'));
+  assertTableInvariants(tipoCatHtml, 'tipoAuditoriaTab');
+
+  const metCatHtml = renderMetodologiaAuditoriaView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedMetodologiaId: '63000000-0000-0000-0000-000000000071',
+      query: '',
+      viewMode: 'list',
+      sortColumn: null,
+      sortDirection: 'none',
+      isSidebarOpen: false,
+      isEditingAttributes: false,
+      isCreating: false,
+    },
+    metodologiasList: [
+      {
+        id: '63000000-0000-0000-0000-000000000071',
+        metodologia: 'Presencial',
+        descripcion: 'Evaluación en sitio',
+        protocolo_tic: 'N/A',
+        regla_muestreo: 'Estándar IAF MD 1',
+        seguridad_confidencialidad: 'Estándar',
+        usage_count: 1,
+      },
+    ],
+    audits: [TEST_AUDIT],
+  });
+  assert.ok(metCatHtml.includes('2026-09 Seg.1'));
+  assert.ok(metCatHtml.includes('AcerosCA'));
+  assertTableInvariants(metCatHtml, 'metodologiaAuditoriaTab');
+
+  const sitioAudHtml = renderSitioAuditoriaView({
+    profile: ADMIN_PROFILE,
+    program: TEST_PROGRAM,
+    audit: TEST_AUDIT,
+    sitePlan: {
+      id: '64000000-0000-0000-0000-000000000071',
+      id_auditoria: IDs.audit,
+      id_sitio: IDs.site,
+      numero_sitio: 0,
+      nombre_sitio: 'Planta Principal Norte',
+      direccion_sitio: 'Zona Industrial Norte',
+      tiempo_auditoria: 2,
+      modalidad_evaluacion: 'Presencial',
+      fecha_inicio: null,
+      fecha_fin: null,
+      notas_sitio: null,
+      procesos: [],
+      equipoSitio: [],
+      deleted_at: null,
+    },
+  });
+  assert.ok(sitioAudHtml.includes('2026-09 Seg.1'));
+  assert.ok(sitioAudHtml.includes('AcerosCA'));
+
+  const pipelineSummaryHtml = renderAuditResumenView({
+    profile: ADMIN_PROFILE,
+    audits: [TEST_AUDIT],
+    programs: [TEST_PROGRAM],
+    temporalSites: [],
+    selectedAuditId: null,
+    isSidebarOpen: false,
+  });
+  assert.ok(pipelineSummaryHtml.includes('2026-09 Seg.1'));
+  assert.ok(pipelineSummaryHtml.includes('AcerosCA'));
+  assert.equal(pipelineSummaryHtml.includes('across'), false);
+  assertTableInvariants(pipelineSummaryHtml, 'auditPipelineSummary');
 });

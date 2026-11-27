@@ -13,6 +13,11 @@ import type {
 } from '../lib/universalTemplate';
 import { renderUniversalTemplate } from './universalTemplate';
 import { renderDetailPageTemplate } from './detailTemplate';
+import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
 
 export interface AuditPipelineSummaryViewProps {
   profile: UserProfile;
@@ -215,8 +220,8 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
       entityType: 'Resumen de Auditoría',
       entitySymbol: '📑',
       title: `Resumen · ${selectedAudit.numero_certificado}`,
-      eyebrowCode: selectedAudit.codigo_auditoria,
-      subtitle: `${selectedAudit.organizacion_nombre} · ${selectedAudit.norma_codigo} · ${selectedAudit.tipo_auditoria}`,
+      eyebrowCode: formatAuditCodename(selectedAudit),
+      subtitle: `${resolveShortOrganizacionName({ nombre: selectedAudit.organizacion_nombre, abreviacion: selectedAudit.organizacion_abreviacion })} · ${selectedAudit.norma_codigo} · ${selectedAudit.tipo_auditoria}`,
       statusBadge: {
         label: selectedAudit.estado_ciclo || selectedAudit.estatus,
         badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
@@ -281,12 +286,18 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
       header: 'Certificado & Org',
       defaultWidthPct: 34,
       minWidthPx: 190,
-      renderCell: (a) => `
+      renderCell: (a) => {
+        const shortOrg = resolveShortOrganizacionName({
+          nombre: a.organizacion_nombre,
+          abreviacion: a.organizacion_abreviacion,
+        });
+        return `
         <div class="min-w-0">
           <div class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(a.numero_certificado)}</div>
-          <div class="text-[11px] text-slate-600 truncate">${escapeHtml(a.organizacion_nombre)}</div>
+          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(a.organizacion_nombre)}">${escapeHtml(shortOrg)}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'auditoria',
@@ -294,8 +305,8 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
       defaultWidthPct: 24,
       minWidthPx: 150,
       renderCell: (a) => `
-        <div class="min-w-0">
-          <div class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(a.codigo_auditoria)}</div>
+        <div class="min-w-0" title="${escapeHtml(getAuditCodenameTooltip(a))}">
+          <div class="font-mono text-xs font-bold text-slate-900 truncate">${escapeHtml(formatAuditCodename(a))}</div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(a.tipo_auditoria)}</div>
         </div>
       `,
@@ -325,7 +336,7 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
     tableId: 'resumen-main',
     title: 'Resumen Ejecutivo de Auditorías',
     subtitle:
-      'Vista consolidada de avance across las 7 etapas del programa de auditoría por certificado.',
+      'Vista consolidada de avance en las 7 etapas del programa de auditoría por certificado.',
     entityLabel: 'auditorías registradas',
     searchQuery: query,
     searchPlaceholder: 'Buscar por certificado, organización, código o estatus...',
@@ -341,7 +352,7 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
     items: filtered,
     columns,
     getRowAttrs: (a) =>
-      `data-action="select-shared-audit" data-audit-id="${escapeHtml(a.id)}" data-cert-id="${escapeHtml(a.id_certificado)}" title="Abrir resumen integral de ${escapeHtml(a.codigo_auditoria)}"`,
+      `data-action="select-shared-audit" data-audit-id="${escapeHtml(a.id)}" data-cert-id="${escapeHtml(a.id_certificado)}" title="Abrir resumen integral de ${escapeHtml(getAuditCodenameTooltip(a))}"`,
     renderCard: (a) => `
       <article
         data-action="select-shared-audit"
@@ -350,11 +361,11 @@ export function renderAuditResumenView(props: AuditPipelineSummaryViewProps): st
         class="bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-4 shadow-2xs space-y-2 cursor-pointer"
       >
         <div class="flex items-center justify-between gap-2">
-          <span class="font-mono text-xs font-bold text-slate-900">${escapeHtml(a.codigo_auditoria)}</span>
+          <span class="font-mono text-xs font-bold text-slate-900" title="${escapeHtml(getAuditCodenameTooltip(a))}">${escapeHtml(formatAuditCodename(a))}</span>
           <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${escapeHtml(a.estado_ciclo || a.estatus)}</span>
         </div>
         <div class="text-xs font-bold text-slate-800 truncate">${escapeHtml(a.numero_certificado)}</div>
-        <div class="text-[11px] text-slate-500 truncate">${escapeHtml(a.organizacion_nombre)}</div>
+        <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(a.organizacion_nombre)}">${escapeHtml(resolveShortOrganizacionName({ nombre: a.organizacion_nombre, abreviacion: a.organizacion_abreviacion }))}</div>
         <div class="pt-2 border-t border-slate-100 text-xs text-slate-700 font-semibold">
           📅 ${escapeHtml(getLatestPlannedLabel(a))}
         </div>

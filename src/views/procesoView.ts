@@ -7,6 +7,7 @@ import {
   type Phase5FindingEntity,
   type ProgramacionAuditEntity,
 } from '../lib/auditExecution';
+import { formatAuditCodename, getAuditCodenameTooltip } from '../lib/codenameDomain';
 import type { RequisitoLtree } from '../lib/extraDomain';
 import {
   getProcessTypeVisual,
@@ -736,7 +737,8 @@ export function renderProcesoView(props: ProcesoViewProps): string {
                 proceso,
                 proceso.hallazgos,
                 state.childSortState?.hallazgos || DEFAULT_PROCESO_CHILD_SORT,
-                tableColumnWidths?.['proceso-tab-hallazgos']
+                tableColumnWidths?.['proceso-tab-hallazgos'],
+                programacionAudits
               );
             }
             if (tabId === 'auditorias') {
@@ -1466,8 +1468,10 @@ function renderProcesoHallazgosTab(
   proceso: ProcesoDetailEntity,
   hallazgos: ReadonlyArray<ProcesoHallazgoLink>,
   sortState: SortState,
-  columnWidths?: Record<string, number>
+  columnWidths?: Record<string, number>,
+  programacionAudits: ReadonlyArray<ProgramacionAuditEntity> = []
 ): string {
+  const auditById = new Map(programacionAudits.map((a) => [a.id, a]));
   const sorted = sortItems([...hallazgos], sortState.column, sortState.direction, (h, col) => {
     switch (col) {
       case 'tipo':
@@ -1551,12 +1555,21 @@ function renderProcesoHallazgosTab(
       sortable: true,
       defaultWidthPct: 18,
       minWidthPx: 115,
-      renderCell: (h) => `
-        <span class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
-          <span class="font-mono">${escapeHtml(h.codigo_auditoria)}</span>
+      renderCell: (h) => {
+        const matchedAudit = auditById.get(h.id_auditoria);
+        const codename = matchedAudit
+          ? formatAuditCodename(matchedAudit)
+          : h.codigo_auditoria;
+        const tooltip = matchedAudit
+          ? getAuditCodenameTooltip(matchedAudit)
+          : h.codigo_auditoria;
+        return `
+        <span class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700" title="${escapeHtml(tooltip)}">
+          <span class="font-mono">${escapeHtml(codename)}</span>
           <span aria-hidden="true">→</span>
         </span>
-      `,
+      `;
+      },
     },
   ];
 
@@ -1614,15 +1627,27 @@ function renderProcesoAuditoriasTab(
       sortable: true,
       defaultWidthPct: 24,
       minWidthPx: 140,
-      renderCell: (row) => `
-        <div class="min-w-0">
+      renderCell: (row) => {
+        const codename = formatAuditCodename({
+          codigo_auditoria: row.codigo_auditoria,
+          tipo_auditoria: row.tipo_auditoria,
+          fecha_inicio: row.fecha_programacion,
+        });
+        const tooltip = getAuditCodenameTooltip({
+          codigo_auditoria: row.codigo_auditoria,
+          tipo_auditoria: row.tipo_auditoria,
+          fecha_inicio: row.fecha_programacion,
+        });
+        return `
+        <div class="min-w-0" title="${escapeHtml(tooltip)}">
           <div class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1 max-w-full">
             <span aria-hidden="true" class="shrink-0">🗓️</span>
-            <span class="truncate">${escapeHtml(row.codigo_auditoria)}</span>
+            <span class="truncate">${escapeHtml(codename)}</span>
           </div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(row.tipo_auditoria)} · ${escapeHtml(row.metodologia)}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'nombre_sitio',

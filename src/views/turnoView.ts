@@ -16,6 +16,7 @@ import {
   type TurnoSitioLink,
 } from '../lib/turnoDomain';
 import { canUnlinkTurnoFromCert } from '../lib/certificadoShareDomain';
+import { formatAuditCodename, getAuditCodenameTooltip } from '../lib/codenameDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
 import { renderListViewTable } from './universalTemplate';
@@ -797,19 +798,31 @@ function renderTurnoAuditoriasTab(
   const columns: ColumnDefinition<TurnoAuditoriaLink>[] = [
     {
       id: 'codigo_auditoria',
-      header: 'Código Auditoría',
+      header: 'Auditoría',
       sortable: true,
       defaultWidthPct: 24,
       minWidthPx: 140,
-      renderCell: (aud) => `
-        <div class="min-w-0">
+      renderCell: (aud) => {
+        const codename = formatAuditCodename({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        const tooltip = getAuditCodenameTooltip({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        return `
+        <div class="min-w-0" title="${escapeHtml(tooltip)}">
           <div class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1 max-w-full">
             <span aria-hidden="true">🗓️</span>
-            <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+            <span class="truncate">${escapeHtml(codename)}</span>
           </div>
           <div class="text-[11px] text-slate-500 truncate">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.numero_certificado)}</div>
         </div>
-      `,
+      `;
+      },
     },
     {
       id: 'sitio',

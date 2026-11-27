@@ -3,6 +3,7 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/accessControl';
 import { canArchiveRecord } from '../lib/archiveGovernance';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
+import { formatAuditCodename, getAuditCodenameTooltip } from '../lib/codenameDomain';
 import type { CertificadoDetailEntity } from '../lib/multisiteSampling';
 import {
   canArchiveSitio,
@@ -1353,16 +1354,28 @@ function renderSitioAuditoriasTab(
   const columns: ColumnDefinition<SitioAuditoriaLink>[] = [
     {
       id: 'codigo_auditoria',
-      header: 'Código Auditoría',
+      header: 'Auditoría',
       sortable: true,
       defaultWidthPct: 22,
       minWidthPx: 130,
-      renderCell: (aud) => `
-        <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1.5 max-w-full">
+      renderCell: (aud) => {
+        const codename = formatAuditCodename({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        const tooltip = getAuditCodenameTooltip({
+          codigo_auditoria: aud.codigo_auditoria,
+          tipo_auditoria: aud.tipo_auditoria,
+          fecha_inicio: aud.fecha_programacion,
+        });
+        return `
+        <span class="font-mono font-bold text-indigo-700 inline-flex items-center gap-1.5 max-w-full" title="${escapeHtml(tooltip)}">
           <span aria-hidden="true" class="shrink-0">🗓️</span>
-          <span class="truncate">${escapeHtml(aud.codigo_auditoria)}</span>
+          <span class="truncate">${escapeHtml(codename)}</span>
         </span>
-      `,
+      `;
+      },
     },
     {
       id: 'fecha_programacion',

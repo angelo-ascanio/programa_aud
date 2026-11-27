@@ -25,6 +25,11 @@ import {
 } from './detailTemplate';
 import type { ProgramacionAuditEntity } from '../lib/auditExecution';
 import {
+  formatAuditCodename,
+  getAuditCodenameTooltip,
+  resolveShortOrganizacionName,
+} from '../lib/codenameDomain';
+import {
   canArchiveRecord,
   extractUniversalArchiveProps,
   type ArchiveMultiViewConfig,
@@ -435,13 +440,13 @@ function renderMetodologiaDetailPage(params: {
   const auditColumns: ColumnDefinition<ProgramacionAuditEntity>[] = [
     {
       id: 'codigo_auditoria',
-      header: 'Código Auditoría',
+      header: 'Auditoría',
       defaultWidthPct: 20,
       minWidthPx: 130,
       renderCell: (a) => `
-        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-700">
+        <span class="inline-flex items-center gap-1.5 font-mono font-bold text-indigo-700" title="${escapeHtml(getAuditCodenameTooltip(a))}">
           <span aria-hidden="true">🗓️</span>
-          <span class="truncate">${escapeHtml(a.codigo_auditoria)}</span>
+          <span class="truncate">${escapeHtml(formatAuditCodename(a))}</span>
         </span>
       `,
     },
@@ -452,7 +457,7 @@ function renderMetodologiaDetailPage(params: {
       minWidthPx: 160,
       renderCell: (a) => `
         <span class="block font-semibold text-slate-800 truncate" title="${escapeHtml(a.organizacion_nombre)}">
-          ${escapeHtml(a.organizacion_nombre)}
+          ${escapeHtml(resolveShortOrganizacionName({ nombre: a.organizacion_nombre, abreviacion: a.organizacion_abreviacion }))}
         </span>
       `,
     },

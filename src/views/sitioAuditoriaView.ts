@@ -15,6 +15,7 @@ import {
   type ProgramaAuditoriaEntity,
 } from '../lib/auditPlanningEngine';
 import type { AuditorDetailEntity } from '../lib/competencyMatrix';
+import { formatAuditCodename, resolveShortOrganizacionName } from '../lib/codenameDomain';
 import {
   renderDetailPageTemplate,
   type DetailAttributeItem,
@@ -463,8 +464,8 @@ export function renderSitioAuditoriaView(props: SitioAuditoriaViewProps): string
     entityType: 'Sitio en Auditoría',
     entitySymbol: '🏭',
     title,
-    subtitle: `${audit.organizacion_nombre} · ${audit.numero_certificado} · ${audit.norma_codigo}`,
-    eyebrowCode: audit.codigo_auditoria,
+    subtitle: `${resolveShortOrganizacionName({ nombre: audit.organizacion_nombre, abreviacion: audit.organizacion_abreviacion })} · ${audit.numero_certificado} · ${audit.norma_codigo}`,
+    eyebrowCode: formatAuditCodename(audit),
     statusBadge,
     backButton: {
       label: 'Volver al Programa',

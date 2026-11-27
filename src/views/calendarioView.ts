@@ -1140,7 +1140,7 @@ export function renderCalendarioView(props: CalendarioViewProps): string {
     (ev, col) => {
       switch (col) {
         case 'programa':
-          return `${ev.codigoDisplay} ${ev.program.etiqueta}`;
+          return `${ev.codenameDisplay} ${ev.program.etiqueta}`;
         case 'vinculacion':
           return `${ev.program.nivel_vinculacion} ${ev.program.tipo_vinculacion}`;
         case 'certificados_org':
