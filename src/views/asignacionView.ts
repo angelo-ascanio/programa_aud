@@ -999,7 +999,10 @@ function renderAuditorDetailView(opts: {
       if (rankScore(compA) !== rankScore(compB)) {
         return rankScore(compA) - rankScore(compB);
       }
-      return a.nombre.localeCompare(b.nombre);
+      const aConflict = conflictIds.has(a.id) ? 1 : 0;
+      const bConflict = conflictIds.has(b.id) ? 1 : 0;
+      if (aConflict !== bConflict) return aConflict - bConflict;
+      return a.nombre.localeCompare(b.nombre, 'es');
     });
 
     const isFocusedDraft =
@@ -1260,14 +1263,15 @@ function renderAuditorDetailView(opts: {
       requiredDays: detail.requiredDaysTotal,
     });
 
+    const affectedNames = detail.iafGapStatus.affectedAuditors
+      .map((a) => a.auditorNombre)
+      .join(', ');
     const iafGapCompactMessage = detail.iafGapStatus.hasIafSectorGap
       ? detail.iafGapStatus.coveredByAssignedExperts
-        ? `✓ ${detail.iafGapStatus.title} — Respaldada por Experto Técnico (${detail.iafGapStatus.coveringExpertNames.join(', ')}).`
-        : `⚠ ${detail.iafGapStatus.message}${
-            detail.iafGapStatus.affectedAuditors.length > 0
-              ? ` Sin cobertura IAF: ${detail.iafGapStatus.affectedAuditors.map((a) => a.auditorNombre).join(', ')}.`
-              : ''
-          } Puede asignar un Experto Técnico (opcional).`
+        ? `✓ Brecha IAF (${detail.iafGapStatus.targetSectorLabel}) respaldada por Experto Técnico (${detail.iafGapStatus.coveringExpertNames.join(', ')}).`
+        : `⚠ Brecha IAF: Equipo sin competencia completa en ${detail.iafGapStatus.targetSectorLabel}${
+            affectedNames ? ` (${affectedNames})` : ''
+          }. Puede asignar un Experto Técnico (opcional).`
       : '';
 
     const iafGapBannerHtml = detail.iafGapStatus.hasIafSectorGap
@@ -1287,10 +1291,36 @@ function renderAuditorDetailView(opts: {
       `
       : '';
 
-    const summaryBannerHtml = `
+    const observacionSectoresHtml =
+      detail.observacionSectoresAlerts.length > 0
+        ? detail.observacionSectoresAlerts
+            .map((obsAlert) => {
+              const sectorsText = obsAlert.intersectedSectors.join(', ');
+              const msg = obsAlert.coveredByExperto
+                ? `✓ Condición sectorial de ${obsAlert.auditorNombre} (Sector ${sectorsText}) cubierta con Experto Técnico asignado (${obsAlert.coveringExpertNames.join(', ')}).`
+                : `⚠ ${obsAlert.auditorNombre} requiere acompañamiento de Experto Técnico en Sector ${sectorsText} ("${obsAlert.rawText}").`;
+              return `
+                <div
+                  role="status"
+                  data-testid="asignacion-obs-sectores-banner"
+                  class="rounded-lg border ${
+                    obsAlert.coveredByExperto
+                      ? 'border-emerald-200 bg-emerald-50/80 text-emerald-950'
+                      : 'border-amber-200 bg-amber-50/90 text-amber-950'
+                  } px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                >
+                  <span class="font-semibold">${escapeHtml(msg)}</span>
+                  <span class="text-[10px] font-bold opacity-80 whitespace-nowrap">No bloqueante</span>
+                </div>
+              `;
+            })
+            .join('')
+        : '';
+
+    const statusBarHtml = `
       <section
-        data-testid="asignacion-summary-banner"
-        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 space-y-2"
+        data-testid="asignacion-status-bar"
+        class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 space-y-1.5"
       >
         <div class="flex flex-wrap items-center justify-between gap-2 tabular-nums">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -1329,39 +1359,10 @@ function renderAuditorDetailView(opts: {
           <div class="h-full rounded-full ${globalMetrics.barClass} transition-all" style="width: ${globalMetrics.widthPct}%"></div>
         </div>
 
-        ${iafGapBannerHtml}
-
-        ${
-          detail.observacionSectoresAlerts.length > 0
-            ? detail.observacionSectoresAlerts
-                .map((obsAlert) => {
-                  const sectorsText = obsAlert.intersectedSectors.join(', ');
-                  const msg = obsAlert.coveredByExperto
-                    ? `✓ Condición sectorial de ${obsAlert.auditorNombre} (Sector ${sectorsText}) cubierta con Experto Técnico asignado (${obsAlert.coveringExpertNames.join(', ')}).`
-                    : `⚠ ${obsAlert.auditorNombre} requiere acompañamiento de Experto Técnico en Sector ${sectorsText} ("${obsAlert.rawText}"). Puede asignar un Experto Técnico global abajo.`;
-                  return `
-                    <div
-                      role="status"
-                      data-testid="asignacion-obs-sectores-banner"
-                      class="rounded-lg border ${
-                        obsAlert.coveredByExperto
-                          ? 'border-emerald-200 bg-emerald-50/80 text-emerald-950'
-                          : 'border-amber-200 bg-amber-50/90 text-amber-950'
-                      } px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"
-                    >
-                      <span class="font-semibold">${escapeHtml(msg)}</span>
-                      <span class="text-[10px] font-bold opacity-80 whitespace-nowrap">No bloqueante</span>
-                    </div>
-                  `;
-                })
-                .join('')
-            : ''
-        }
-
         ${
           detail.rotationSummary?.requiresRotation && detail.rotationSummary.warningMessage
             ? `
-              <div class="rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-[11px] font-medium text-amber-900">
+              <div class="rounded-lg border border-amber-200 bg-amber-50/90 px-2.5 py-1 text-[11px] font-medium text-amber-900">
                 ⚠️ ${escapeHtml(detail.rotationSummary.warningMessage)}
               </div>
             `
@@ -1371,7 +1372,7 @@ function renderAuditorDetailView(opts: {
         ${
           detail.scheduleConflicts.length > 0
             ? `
-              <div data-testid="asignacion-schedule-conflicts" class="rounded-lg border border-rose-200 bg-rose-50/80 px-3 py-1.5 space-y-0.5 text-[11px] text-rose-800">
+              <div data-testid="asignacion-schedule-conflicts" class="rounded-lg border border-rose-200 bg-rose-50/80 px-2.5 py-1 space-y-0.5 text-[11px] text-rose-800">
                 <div class="font-bold text-rose-900">
                   ⚠️ Conflictos de calendario (${detail.scheduleConflicts.length})
                 </div>
@@ -1585,11 +1586,13 @@ function renderAuditorDetailView(opts: {
                           </button>
                         </div>
                       `
-                      : `
+                      : exp.observacion
+                      ? `
                         <p class="text-[11px] text-slate-600">
-                          <strong>Observación:</strong> ${escapeHtml(exp.observacion || 'Sin observación.')}
+                          <strong>Observación:</strong> ${escapeHtml(exp.observacion)}
                         </p>
                       `
+                      : ''
                   }
                 </div>
               `;
@@ -1702,6 +1705,9 @@ function renderAuditorDetailView(opts: {
           </span>
         </div>
 
+        ${iafGapBannerHtml}
+        ${observacionSectoresHtml}
+
         ${
           state.expertoFeedbackMessage
             ? `<div role="status" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-800">${escapeHtml(state.expertoFeedbackMessage)}</div>`
@@ -1739,7 +1745,7 @@ function renderAuditorDetailView(opts: {
 
     bodyHtml = `
       <div class="space-y-3">
-        ${summaryBannerHtml}
+        ${statusBarHtml}
         ${missingTemporalRecordWarningHtml}
         ${unitsAreaHtml}
         ${expertosSectionHtml}

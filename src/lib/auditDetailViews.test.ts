@@ -24,6 +24,19 @@ import {
   resolveProgramDetailMode,
   suggestNextProgramCode,
 } from '../views/programacionView';
+import {
+  DEFAULT_ASIGNACION_STATE,
+  renderAsignacionView,
+} from '../views/asignacionView';
+import {
+  DEFAULT_PROGRAMA_PROCESOS_STATE,
+  renderProgramaProcesosView,
+} from '../views/programaProcesosView';
+import {
+  DEFAULT_PROGRAMA_TURNOS_STATE,
+  renderProgramaTurnosView,
+} from '../views/programaTurnosView';
+import { INITIAL_EXPERTOS_TECNICOS } from './expertoTecnicoDomain';
 
 const ADMIN_PROFILE: UserProfile = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -869,3 +882,93 @@ test('Step 3.2.2: RBAC hides date mutators for AUDITOR and CLIENT, and isolates 
   assert.equal(clientBlockedSiteHtml.includes('id="openAuditDateFormBtn"'), false);
   assert.equal(clientBlockedSiteHtml.includes('data-action="archive-audit-date"'), false);
 });
+
+test('Step 4.3: Detail Views 3. Auditor, 4. Proceso, and 5. Turno share unified Zone 1+2 shell and enforce Less Is More Zone 3 + RBAC + table-fixed', () => {
+  const programs = buildStep322RichProgramsFixture();
+  const nivel1Program = programs[1];
+  const activeAudit = nivel1Program.auditorias[0];
+  const targetCertId = activeAudit.id_certificado;
+  const targetOrgId = activeAudit.id_organizacion;
+
+  for (const roleProfile of [ADMIN_PROFILE, WORKER_PROFILE, AUDITOR_PROFILE, CLIENT_PROFILE]) {
+    const isStaffRole = roleProfile.role === 'ADMIN' || roleProfile.role === 'WORKER';
+
+    const auditorHtml = renderAsignacionView({
+      profile: roleProfile,
+      state: {
+        ...DEFAULT_ASIGNACION_STATE,
+        selectedCertId: targetCertId,
+        selectedAuditId: activeAudit.id,
+      },
+      programs,
+      audits: nivel1Program.auditorias,
+      temporalSites: [],
+      auditors: INITIAL_AUDITORES_DETAILED,
+      expertos: INITIAL_EXPERTOS_TECNICOS,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      certificates: SAMPLE_CERTIFICATE_RECORDS,
+      authorizedClientOrgIds: roleProfile.role === 'CLIENT' ? [targetOrgId] : [],
+    });
+
+    const procesoHtml = renderProgramaProcesosView({
+      profile: roleProfile,
+      state: {
+        ...DEFAULT_PROGRAMA_PROCESOS_STATE,
+        selectedCertId: targetCertId,
+        selectedAuditId: activeAudit.id,
+      },
+      programs,
+      audits: nivel1Program.auditorias,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      certificates: SAMPLE_CERTIFICATE_RECORDS,
+      authorizedClientOrgIds: roleProfile.role === 'CLIENT' ? [targetOrgId] : [],
+    });
+
+    const turnoHtml = renderProgramaTurnosView({
+      profile: roleProfile,
+      state: {
+        ...DEFAULT_PROGRAMA_TURNOS_STATE,
+        selectedCertId: targetCertId,
+        selectedAuditId: activeAudit.id,
+      },
+      programs,
+      audits: nivel1Program.auditorias,
+      certificados: INITIAL_CERTIFICADOS_DETAILED,
+      certificates: SAMPLE_CERTIFICATE_RECORDS,
+      authorizedClientOrgIds: roleProfile.role === 'CLIENT' ? [targetOrgId] : [],
+    });
+
+    for (const [label, html] of [
+      [`Step 4.3 3. Auditor (${roleProfile.role})`, auditorHtml],
+      [`Step 4.3 4. Proceso (${roleProfile.role})`, procesoHtml],
+      [`Step 4.3 5. Turno (${roleProfile.role})`, turnoHtml],
+    ] as const) {
+      assertCleanZeroUuid(label, html);
+      if (/<table\b/i.test(html)) {
+        assertAllTablesFixedAndNoButtonsInTd(label, html);
+      }
+      assert.ok(html.includes('data-testid="audit-zone-1-data"'), `${label}: missing Zone 1`);
+      assert.ok(html.includes('data-testid="audit-zone-2-selectors"'), `${label}: missing Zone 2`);
+      assert.equal(
+        html.includes('data-action="select-linked-sibling-select"'),
+        false,
+        `${label}: linked sibling selector must stay hidden`
+      );
+      if (!isStaffRole) {
+        assert.ok(html.includes('Solo lectura'), `${label}: missing read-only badge`);
+      }
+    }
+
+    assert.ok(auditorHtml.includes('data-testid="asignacion-status-bar"'));
+    assert.ok(auditorHtml.includes('data-testid="asignacion-expertos-section"'));
+    assert.ok(procesoHtml.includes('data-testid="programa-procesos-summary-bar"'));
+    assert.ok(turnoHtml.includes('data-testid="turno-sticky-site-nav"'));
+
+    if (isStaffRole) {
+      assert.ok(auditorHtml.includes('data-action="submit-asignacion-experto"'));
+    } else {
+      assert.equal(auditorHtml.includes('data-action="submit-asignacion-experto"'), false);
+    }
+  }
+});
+

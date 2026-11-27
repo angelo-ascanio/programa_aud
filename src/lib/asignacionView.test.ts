@@ -1020,4 +1020,63 @@ test('Step 4.1 UI: renders disambiguated Yurima Carrillo options, non-blocking i
   assert.equal(assertZeroUuidExposure(coveredHtml).compliant, true);
 });
 
+test('Step 4.3: 3. Auditor Zone 3 uses compact status bar, integrates IAF gap + observacion_sectores inside Experto Tecnico block, and orders select by qualification & availability', () => {
+  const { programs, temporalSites } = makeFixtureData();
+  const audits = programs.flatMap((p) => p.auditorias);
+  const thirdAuditorId = 'a1000000-0000-0000-0000-000000000003';
+  const extendedAuditors: AuditorDetailEntity[] = [
+    ...AUDITORS,
+    {
+      ...AUDITORS[0],
+      id: thirdAuditorId,
+      nombre: 'Sofía Delgado',
+      siglas: 'SD',
+      cedula_identidad: '99887766',
+    },
+  ];
+  const html = renderAsignacionView({
+    profile: ADMIN_PROFILE,
+    state: makeState({
+      selectedCertId: UUID_CERT_1,
+      selectedAuditId: UUID_AUDIT_1,
+    }),
+    programs,
+    audits,
+    temporalSites,
+    auditors: extendedAuditors,
+    expertos: INITIAL_EXPERTOS_TECNICOS,
+    certificados: CERTIFICADOS,
+    vinculos: VINCULOS,
+    conglomerados: CONGLOMERADOS,
+  });
+
+  // Compact status bar replaces legacy oversized asignacion-summary-banner
+  assert.match(html, /data-testid="asignacion-status-bar"/);
+  assert.doesNotMatch(html, /data-testid="asignacion-summary-banner"/);
+
+  const statusBarStart = html.indexOf('data-testid="asignacion-status-bar"');
+  const expertSecStart = html.indexOf('data-testid="asignacion-expertos-section"');
+  const iafBannerIdx = html.indexOf('data-testid="asignacion-iaf-gap-banner"');
+  assert.ok(statusBarStart > -1 && expertSecStart > statusBarStart);
+  assert.ok(
+    iafBannerIdx > expertSecStart,
+    'IAF gap banner must live inside Global Experto Tecnico section, not top status bar'
+  );
+  assert.match(html, /⚠ Brecha IAF: Equipo sin competencia completa/);
+  assert.match(html, /Puede asignar un Experto Técnico \(opcional\)\./);
+
+  // Auditor select prioritizes qualified + available auditors over non-qualified/assigned ones
+  const unit1SelectMatch = html.match(
+    new RegExp(`<select[^>]*id="asignacionAuditorSelect_${UUID_SITE_1}"[\\s\\S]*?</select>`)
+  );
+  assert.ok(unit1SelectMatch);
+  const posQualifiedAvailable = unit1SelectMatch[0].indexOf('Sofía Delgado');
+  const posAssigned = unit1SelectMatch[0].indexOf('Carlos Alberto Ríos');
+  assert.ok(
+    posQualifiedAvailable > -1 && posAssigned > -1 && posQualifiedAvailable < posAssigned,
+    'Expected qualified & available auditor (Sofía Delgado) before assigned/unqualified auditor'
+  );
+  assert.equal(assertZeroUuidExposure(html).compliant, true);
+});
+
 

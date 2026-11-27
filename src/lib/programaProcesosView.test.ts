@@ -1059,4 +1059,88 @@ describe('Step 7.1 — 4. Proceso & 5. Turno Certificate-Based Views', () => {
     });
     assert.match(compatTurnos, /data-resizable-table="turno-main"/);
   });
+
+  it('Step 4.3: 4. Proceso renders ISO 4.3 exclusions badge with full tooltip and 5. Turno omits redundant no-shifts alert when configured', () => {
+    const fx = buildFixture();
+    const certsWithExclusions: CertificadoDetailEntity[] = fx.certificados.map((c, idx) =>
+      idx === 0
+        ? {
+            ...c,
+            noAplicables: [
+              {
+                id: 'na-43-1',
+                id_certificado: c.id,
+                id_requisito: 'req-83',
+                requisito_codigo: '8.3',
+                requisito_titulo: 'Diseño y desarrollo de productos y servicios',
+                justificacion: 'No realiza diseño',
+                deleted_at: null,
+              },
+            ],
+          }
+        : c
+    );
+
+    const procesoHtml = renderProgramaProcesosView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_PROCESOS_STATE,
+        selectedCertId: IDs.certA,
+        selectedAuditId: IDs.auditCurrent,
+      },
+      audits: fx.audits,
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithExclusions,
+    });
+
+    assert.match(procesoHtml, /data-testid="programa-procesos-summary-bar"/);
+    assert.match(procesoHtml, /data-testid="proceso-iso43-exclusions"/);
+    assert.match(procesoHtml, /Exclusiones ISO 4\.3 \(1\)/);
+    assert.match(procesoHtml, /8\.3 · Diseño y desarrollo de productos y servicios/);
+    assert.doesNotMatch(procesoHtml, /data-action="select-linked-sibling-select"/);
+
+    // When shifts exist, no-shifts alert must NOT clutter Zone 3
+    const certsWithShifts: CertificadoDetailEntity[] = fx.certificados.map((c, idx) =>
+      idx === 0
+        ? {
+            ...c,
+            sitios: c.sitios.map((s) =>
+              s.id === IDs.siteHq
+                ? {
+                    ...s,
+                    turnos_por_sitio: [
+                      {
+                        id: IDs.tpsHqMat,
+                        id_sitio: s.id,
+                        hora_entrada: '08:00:00',
+                        hora_salida: '16:00:00',
+                        descripcion: 'Matutino',
+                        deleted_at: null,
+                      },
+                    ],
+                  }
+                : s
+            ),
+          }
+        : c
+    );
+    const turnoConfiguredHtml = renderProgramaTurnosView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...DEFAULT_PROGRAMA_TURNOS_STATE,
+        selectedCertId: IDs.certA,
+        selectedAuditId: IDs.auditCurrent,
+      },
+      audits: fx.audits,
+      programs: fx.programs,
+      vinculos: fx.vinculos,
+      certificados: certsWithShifts,
+    });
+    assert.doesNotMatch(turnoConfiguredHtml, /data-testid="programa-site-no-shifts-alert"/);
+    assert.match(turnoConfiguredHtml, /data-testid="turno-sticky-site-nav"/);
+    assert.equal(assertZeroUuidExposure(procesoHtml).compliant, true);
+    assert.equal(assertZeroUuidExposure(turnoConfiguredHtml).compliant, true);
+  });
 });
+
