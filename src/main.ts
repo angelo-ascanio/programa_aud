@@ -795,10 +795,12 @@ import {
   createEmptyAuditorTelefonoDraft,
   createEmptyCompetenciaFormDraft,
   createEmptyEvaluacionInSituDraft,
+  enrichAuditorsWithHistorial,
   getCredentialValidityState,
   getPrimaryAuditorEmail,
   getPrimaryAuditorTelefono,
   removeCompetenciaLinkFromAuditor,
+  sortEvaluacionesInSituChronological,
   summarizeEvaluacionesInSitu,
   validateAuditorDraft,
   validateAuditorEmailDraft,
@@ -2539,7 +2541,10 @@ function render(): void {
       auditorState: state.auditorDomain,
       authUserEmail: state.user?.email || null,
       competenciaAuditorState: state.competenciaAuditorDomain,
-      allAuditorsDetailed: state.domainData.allAuditorsDetailed,
+      allAuditorsDetailed: enrichAuditorsWithHistorial(
+        state.domainData.allAuditorsDetailed,
+        scopedProgramacionAudits
+      ),
       expertoTecnicoState: state.expertoTecnicoDomain,
       allExpertosTecnicos: state.domainData.allExpertosTecnicos,
       programacionAudits: scopedProgramacionAudits,
@@ -24823,6 +24828,7 @@ function bindAuthenticatedEvents(): void {
 
       const { evaluacion: createdEval, summary } = res.data;
       const nextEvaluaciones = [...(aud.evaluaciones_in_situ || []), createdEval];
+      const latestEval = sortEvaluacionesInSituChronological(nextEvaluaciones)[0];
       const nextSinRegistro = false;
       if (summary.sin_registro_evaluacion) {
         await getAuditorSupabaseClient()
@@ -24847,10 +24853,11 @@ function bindAuthenticatedEvents(): void {
               evaluaciones_in_situ: nextEvaluaciones,
               ultima_evaluacion_in_situ_fecha: nextUltFecha,
               proxima_evaluacion_in_situ_fecha: nextProxFecha,
-              ultima_evaluacion_in_situ_texto:
-                createdEval.ultima_evaluacion_texto || a.ultima_evaluacion_in_situ_texto,
-              proxima_evaluacion_in_situ_texto:
-                createdEval.proxima_evaluacion_texto || a.proxima_evaluacion_in_situ_texto,
+              ultima_evaluacion_in_situ_texto: latestEval?.ultima_evaluacion_texto || '',
+              proxima_evaluacion_in_situ_texto: latestEval?.proxima_evaluacion_texto || '',
+              sector_area_evaluado_texto:
+                latestEval?.sector_area_evaluado || a.sector_area_evaluado_texto,
+              observaciones_evaluacion: latestEval?.observaciones || '',
               sin_registro_evaluacion: nextSinRegistro,
             }
           : a
@@ -24952,6 +24959,7 @@ function bindAuthenticatedEvents(): void {
           );
           const recalculatedSummary = summarizeEvaluacionesInSitu(nextEvaluaciones);
           const nextSummary = res.data.summary ?? recalculatedSummary;
+          const latestRemainingEval = sortEvaluacionesInSituChronological(nextEvaluaciones)[0];
 
           state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
             a.id === aud.id
@@ -24960,6 +24968,12 @@ function bindAuthenticatedEvents(): void {
                   evaluaciones_in_situ: nextEvaluaciones,
                   ultima_evaluacion_in_situ_fecha: nextSummary.ultima_evaluacion_in_situ_fecha,
                   proxima_evaluacion_in_situ_fecha: nextSummary.proxima_evaluacion_in_situ_fecha,
+                  ultima_evaluacion_in_situ_texto:
+                    latestRemainingEval?.ultima_evaluacion_texto || '',
+                  proxima_evaluacion_in_situ_texto:
+                    latestRemainingEval?.proxima_evaluacion_texto || '',
+                  sector_area_evaluado_texto: latestRemainingEval?.sector_area_evaluado || '',
+                  observaciones_evaluacion: latestRemainingEval?.observaciones || '',
                   sin_registro_evaluacion: nextSummary.sin_registro_evaluacion,
                 }
               : a

@@ -2668,3 +2668,154 @@ export function removeCompetenciaLinkFromAuditor(params: {
   };
 }
 
+export interface AuditorAuditHistorialSource {
+  id: string;
+  codigo_auditoria: string;
+  organizacion_nombre: string;
+  numero_certificado: string;
+  norma_codigo: string;
+  tipo_auditoria: string;
+  metodologia?: string | null;
+  fecha_inicio?: string | null;
+  latestDate?: { fecha_inicio?: string | null } | null;
+  estatus?: string | null;
+  auditor_lider_id?: string | null;
+  equipo?: ReadonlyArray<{
+    id_auditor?: string | null;
+    rol?: string | null;
+  }>;
+  deleted_at?: string | null;
+}
+
+function normalizeHistorialMetodologia(
+  raw: string | null | undefined
+): AuditoriaRealizadaEntity['metodologia'] {
+  const norm = normalizeText(raw);
+  if (norm.includes('remot')) return 'Remota';
+  if (norm.includes('mixt')) return 'Mixta';
+  return 'Presencial';
+}
+
+function normalizeHistorialEstatus(
+  raw: string | null | undefined
+): AuditoriaRealizadaEntity['estatus'] {
+  const norm = normalizeText(raw);
+  if (norm.includes('cerrad')) return 'Cerrada';
+  if (norm.includes('complet')) return 'Completada';
+  if (norm.includes('ejecu')) return 'En Ejecución';
+  return 'Planificada';
+}
+
+export function deriveAuditorHistorialFromAudits(
+  audits: ReadonlyArray<AuditorAuditHistorialSource>
+): Map<string, AuditoriaRealizadaEntity[]> {
+  const byAuditor = new Map<string, Map<string, AuditoriaRealizadaEntity>>();
+
+  for (const audit of audits) {
+    if (!audit || audit.deleted_at || !audit.id) continue;
+    const rolesByAuditor = new Map<string, string>();
+
+    if (Array.isArray(audit.equipo)) {
+      for (const member of audit.equipo) {
+        const memberId = (member?.id_auditor || '').trim();
+        if (!memberId) continue;
+        const roleLabel = (member?.rol || '').trim() || 'Auditor de Equipo';
+        rolesByAuditor.set(memberId, roleLabel);
+      }
+    }
+
+    const leadId = (audit.auditor_lider_id || '').trim();
+    if (leadId) {
+      rolesByAuditor.set(leadId, 'Auditor Líder');
+    }
+
+    if (rolesByAuditor.size === 0) continue;
+
+    const fechaEjecucion = (
+      audit.latestDate?.fecha_inicio ||
+      audit.fecha_inicio ||
+      ''
+    ).trim();
+    const metodologia = normalizeHistorialMetodologia(audit.metodologia);
+    const estatus = normalizeHistorialEstatus(audit.estatus);
+
+    for (const [auditorId, rolEnAuditoria] of rolesByAuditor.entries()) {
+      let auditMap = byAuditor.get(auditorId);
+      if (!auditMap) {
+        auditMap = new Map<string, AuditoriaRealizadaEntity>();
+        byAuditor.set(auditorId, auditMap);
+      }
+      if (!auditMap.has(audit.id)) {
+        auditMap.set(audit.id, {
+          id: audit.id,
+          id_auditor: auditorId,
+          codigo_auditoria: audit.codigo_auditoria,
+          organizacion_nombre: audit.organizacion_nombre,
+          numero_certificado: audit.numero_certificado,
+          norma_codigo: audit.norma_codigo,
+          tipo_auditoria: audit.tipo_auditoria,
+          metodologia,
+          rol_en_auditoria: rolEnAuditoria,
+          fecha_ejecucion: fechaEjecucion,
+          estatus,
+        });
+      }
+    }
+  }
+
+  const result = new Map<string, AuditoriaRealizadaEntity[]>();
+  for (const [auditorId, auditMap] of byAuditor.entries()) {
+    const sorted = Array.from(auditMap.values()).sort((a, b) => {
+      const dateCmp = (b.fecha_ejecucion || '').localeCompare(a.fecha_ejecucion || '');
+      if (dateCmp !== 0) return dateCmp;
+      return b.codigo_auditoria.localeCompare(a.codigo_auditoria, 'es');
+    });
+    result.set(auditorId, sorted);
+  }
+  return result;
+}
+
+export function enrichAuditorsWithHistorial(
+  auditors: ReadonlyArray<AuditorDetailEntity>,
+  audits: ReadonlyArray<AuditorAuditHistorialSource>
+): AuditorDetailEntity[] {
+  const derivedByAuditor = deriveAuditorHistorialFromAudits(audits);
+  return auditors.map((auditor) => {
+    const derived = derivedByAuditor.get(auditor.id) || [];
+    const existing = Array.isArray(auditor.historialAuditorias)
+      ? auditor.historialAuditorias
+      : [];
+    if (derived.length === 0) {
+      return auditor;
+    }
+
+    const mergedById = new Map<string, AuditoriaRealizadaEntity>();
+    const seenCodes = new Set<string>();
+    for (const item of derived) {
+      mergedById.set(item.id, item);
+      if (item.codigo_auditoria) {
+        seenCodes.add(item.codigo_auditoria.toLowerCase());
+      }
+    }
+    for (const item of existing) {
+      if (mergedById.has(item.id)) continue;
+      if (item.codigo_auditoria && seenCodes.has(item.codigo_auditoria.toLowerCase())) {
+        continue;
+      }
+      mergedById.set(item.id, item);
+    }
+
+    const historialAuditorias = Array.from(mergedById.values()).sort((a, b) => {
+      const dateCmp = (b.fecha_ejecucion || '').localeCompare(a.fecha_ejecucion || '');
+      if (dateCmp !== 0) return dateCmp;
+      return b.codigo_auditoria.localeCompare(a.codigo_auditoria, 'es');
+    });
+
+    return {
+      ...auditor,
+      historialAuditorias,
+    };
+  });
+}
+
+

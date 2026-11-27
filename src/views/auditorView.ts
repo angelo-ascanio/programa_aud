@@ -2306,7 +2306,7 @@ function renderHistorialChildTab(
     {
       id: 'organizacion_nombre',
       header: 'Organización Cliente',
-      defaultWidthPct: 24,
+      defaultWidthPct: 21,
       minWidthPx: 140,
       renderCell: (aud) =>
         `<span class="font-bold text-slate-800 truncate block" title="${escapeHtml(
@@ -2324,7 +2324,7 @@ function renderHistorialChildTab(
     {
       id: 'modalidad',
       header: 'Modalidad',
-      defaultWidthPct: 15,
+      defaultWidthPct: 14,
       minWidthPx: 110,
       renderCell: (aud) =>
         `<span class="text-slate-700">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.metodologia)}</span>`,
@@ -2340,21 +2340,21 @@ function renderHistorialChildTab(
     {
       id: 'fecha_ejecucion',
       header: 'Fecha',
-      defaultWidthPct: 8,
-      minWidthPx: 85,
+      defaultWidthPct: 9,
+      minWidthPx: 95,
       renderCell: (aud) =>
-        `<span class="font-mono text-[11px] text-slate-600 tabular-nums">${escapeHtml(aud.fecha_ejecucion || '—')}</span>`,
+        `<span class="font-mono text-[11px] text-slate-600 tabular-nums whitespace-nowrap">${escapeHtml(aud.fecha_ejecucion || '—')}</span>`,
     },
     {
       id: 'estatus',
       header: 'Estatus',
       align: 'center',
-      defaultWidthPct: 8,
-      minWidthPx: 85,
+      defaultWidthPct: 11,
+      minWidthPx: 105,
       renderCell: (aud) => {
         const isCompleted = aud.estatus === 'Completada' || aud.estatus === 'Cerrada';
         return `
-          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border whitespace-nowrap ${
             isCompleted
               ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
               : 'bg-indigo-50 text-indigo-800 border-indigo-200'

@@ -39,6 +39,7 @@ import {
   buildAuditorSearchableText,
   sortEvaluacionesInSituChronological,
   formatAuditorSelectorLabel,
+  enrichAuditorsWithHistorial,
   type AuditorDetailEntity,
   type CompetenciaAuditorEntity,
 } from './competencyMatrix';
@@ -1489,6 +1490,104 @@ describe('Step 3.2 - Auditor Detail View (3 Zones, 4 Child Tabs, Archive/Restore
     assert.ok(readCompHtml.includes('Yurima Carrillo (YC · C.I. 12310919)'));
     assert.equal(assertZeroUuidExposure(readCompHtml).compliant, true);
   });
+
+  it('derives historialAuditorias from programacionAudits and renders edit mode cleanly', () => {
+    const baseTemplate = INITIAL_AUDITORES_DETAILED[0];
+    const enriched = enrichAuditorsWithHistorial(
+      [
+        { ...baseTemplate, id: '10000000-0000-0000-0000-000000000001', historialAuditorias: [] },
+        { ...baseTemplate, id: '10000000-0000-0000-0000-000000000004', historialAuditorias: [] },
+      ],
+      [
+        {
+          id: '80000000-0000-0000-0000-000000000002',
+          codigo_auditoria: 'AUD-2024-002',
+          organizacion_nombre: 'CyberCloud Solutions S.L.',
+          numero_certificado: 'FN-EMS-2024-002',
+          norma_codigo: 'ISO 14001:2015',
+          tipo_auditoria: 'Etapa 1',
+          metodologia: 'Remota',
+          fecha_inicio: '2024-11-19',
+          estatus: 'En Ejecución',
+          auditor_lider_id: '10000000-0000-0000-0000-000000000001',
+          equipo: [
+            { id_auditor: '10000000-0000-0000-0000-000000000001', rol: 'Auditor Líder' },
+            { id_auditor: '10000000-0000-0000-0000-000000000004', rol: 'Auditor de Equipo' },
+          ],
+        },
+        {
+          id: '80000000-0000-0000-0000-000000000099',
+          codigo_auditoria: 'AUD-2024-099',
+          organizacion_nombre: 'Empresa Archivada S.A.',
+          numero_certificado: 'FN-QMS-2024-099',
+          norma_codigo: 'ISO 9001:2015',
+          tipo_auditoria: 'Seguimiento 1',
+          metodologia: 'Presencial',
+          fecha_inicio: '2024-10-01',
+          estatus: 'Cerrado',
+          auditor_lider_id: '10000000-0000-0000-0000-000000000001',
+          equipo: [],
+          deleted_at: '2024-11-01T00:00:00Z',
+        },
+      ]
+    );
+
+    assert.equal(enriched[0].historialAuditorias.length, 1);
+    assert.equal(enriched[0].historialAuditorias[0].rol_en_auditoria, 'Auditor Líder');
+    assert.equal(enriched[0].historialAuditorias[0].estatus, 'En Ejecución');
+    assert.equal(enriched[1].historialAuditorias.length, 1);
+    assert.equal(enriched[1].historialAuditorias[0].rol_en_auditoria, 'Auditor de Equipo');
+
+    const histHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        selectedAuditorId: enriched[1].id,
+        activeChildTab: 'historial',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+      },
+      auditors: enriched,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(histHtml.includes('CyberCloud'));
+    assert.ok(histHtml.includes('FN-EMS-2024-002'));
+    assert.ok(histHtml.includes('data-action="select-prog-audit-by-code"'));
+    assert.equal(assertZeroUuidExposure(histHtml).compliant, true);
+
+    const editHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        selectedAuditorId: enriched[0].id,
+        activeChildTab: 'competencias',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: true,
+      },
+      auditors: enriched,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(editHtml.includes('id="auditorDetailForm"'));
+    assert.ok(editHtml.includes('id="saveAuditorFormBtn"'));
+    assert.ok(editHtml.includes('id="cancelEditAuditorBtn"'));
+    assert.ok(editHtml.includes(enriched[0].nombre));
+    assert.equal(assertZeroUuidExposure(editHtml).compliant, true);
+  });
 });
+
 
 
