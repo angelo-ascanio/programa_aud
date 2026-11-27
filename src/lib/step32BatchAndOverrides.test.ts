@@ -22,7 +22,13 @@ import {
   groupPrunedLinksByProcess,
 } from './noAplicableDomain';
 import { renderProcesoView } from '../views/procesoView';
-import { renderNoAplicableView } from '../views/noAplicableView';
+import {
+  renderNoAplicableChecklistRowsHtml,
+  renderNoAplicableView,
+} from '../views/noAplicableView';
+import {
+  buildNoAplicablePickerRows,
+} from './noAplicableDomain';
 import { renderRequisitoView } from '../views/requisitoView';
 import { assertZeroUuidExposure } from './zeroUuid';
 
@@ -360,8 +366,8 @@ test('Step 3.2: noAplicableView displays hierarchical selector, non-blocking Sma
   assert.ok(smartMutationHtml.includes('Mutación Inteligente (No Bloqueante)'));
   assert.ok(smartMutationHtml.includes('Operación Productiva'));
   assert.ok(smartMutationHtml.includes('Cláusula 5.1'));
-  assert.ok(smartMutationHtml.includes('(En uso por 1 proceso(s))'));
-  assert.ok(smartMutationHtml.includes('(Ya excluida directamente)'));
+  assert.ok(smartMutationHtml.includes('🔗 En uso por 1 proceso(s)'));
+  assert.ok(smartMutationHtml.includes('⛔ Ya excluida directamente'));
 
   const detailForm = smartMutationHtml.match(/<form id="noAplicableDetailForm"[\s\S]*?<\/form>/);
   assert.ok(detailForm);
@@ -502,3 +508,185 @@ test('Step 3.2: requisitoView exposes normative obligation badge in read mode & 
   assert.equal(validated.normalized.es_obligatorio, true);
   assert.equal(validated.normalized.obligatorio_origen, 'MANUAL');
 });
+
+test('Process & Non-Applicable hierarchical pickers: default chapter expansion, parent-retaining search for 4.4, and single-line truncation', () => {
+  const baseCert = INITIAL_CERTIFICADOS_DETAILED[0];
+  assert.ok(baseCert);
+
+  const req4: RequisitoLtree = {
+    id: 'f1000000-0000-0000-0000-000000000004',
+    id_norma: baseCert.id_norma,
+    norma_codigo: baseCert.norma_codigo,
+    id_requisito_padre: null,
+    codigo: '4',
+    es_obligatorio: false,
+    obligatorio_origen: 'AUTO_TEXT',
+    titulo: 'Contexto de la organización',
+    descripcion: '',
+    ruta_materializada: '4',
+    nivel: 1,
+    es_padre: true,
+  };
+  const req44: RequisitoLtree = {
+    id: 'f1000000-0000-0000-0000-000000000044',
+    id_norma: baseCert.id_norma,
+    norma_codigo: baseCert.norma_codigo,
+    id_requisito_padre: req4.id,
+    codigo: '4.4',
+    es_obligatorio: true,
+    obligatorio_origen: 'AUTO_TEXT',
+    titulo: 'Sistema de gestión de la calidad y sus procesos',
+    descripcion: '<p>La organización debe establecer, implementar, mantener y mejorar continuamente un sistema de gestión.</p>',
+    ruta_materializada: '4.4_4',
+    nivel: 2,
+    es_padre: true,
+  };
+  const req441: RequisitoLtree = {
+    id: 'f1000000-0000-0000-0000-000000000441',
+    id_norma: baseCert.id_norma,
+    norma_codigo: baseCert.norma_codigo,
+    id_requisito_padre: req44.id,
+    codigo: '4.4.1',
+    es_obligatorio: true,
+    obligatorio_origen: 'AUTO_TEXT',
+    titulo: '',
+    descripcion: '<p>La organización debe determinar los procesos necesarios para el SGC.</p>',
+    ruta_materializada: '4.4_4.4_4_1',
+    nivel: 3,
+    es_padre: false,
+  };
+
+  const treeCatalog: RequisitoLtree[] = [req4, req44, req441];
+  const isolatedCert: CertificadoDetailEntity = {
+    ...baseCert,
+    procesos: [
+      {
+        id: 'p1000000-0000-0000-0000-000000000001',
+        id_certificado: baseCert.id,
+        nombre_proceso: 'Dirección',
+        tipo: 'Estratégico',
+        clausulas_cubiertas: [],
+        requisitos_detalle: [],
+      },
+    ],
+    noAplicables: [],
+  };
+
+  const resolvedProc = resolveProcesoDetailById({
+    procesoId: isolatedCert.procesos[0].id,
+    activeCertId: isolatedCert.id,
+    certificates: [isolatedCert],
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: treeCatalog,
+  });
+  assert.ok(resolvedProc);
+
+  // 1. Default view in Process picker expands Chapter (4) so 4 & 4.4 show, while 4.4.1 starts collapsed
+  const procDefaultHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: resolvedProc.id,
+      activeChildTab: 'requisitos',
+      isAssigningRequisito: true,
+      batchMode: 'all',
+      batchFilterQuery: '',
+      selectedBatchRequisitoIds: [],
+    },
+    proceso: resolvedProc,
+    certificates: [isolatedCert],
+    requirementsCatalog: treeCatalog,
+  });
+
+  assert.ok(procDefaultHtml.includes('data-codigo="4"'));
+  assert.ok(procDefaultHtml.includes('data-codigo="4.4"'));
+  assert.equal(procDefaultHtml.includes('data-codigo="4.4.1"'), false);
+  assert.ok(procDefaultHtml.includes('data-action="toggle-proceso-batch-node"'));
+  assert.ok(procDefaultHtml.includes('truncate text-xs'));
+  assert.ok(procDefaultHtml.includes('4.4</span> Sistema de gestión de la calidad y sus procesos:'));
+
+  // 2. Search "4.4" in Process picker retains parent "4.4" (collapsible) and keeps child "4.4.1" collapsed initially, then visible when expanded
+  const procSearchCollapsedHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: resolvedProc.id,
+      activeChildTab: 'requisitos',
+      isAssigningRequisito: true,
+      batchMode: 'all',
+      batchFilterQuery: '4.4',
+      selectedBatchRequisitoIds: [],
+    },
+    proceso: resolvedProc,
+    certificates: [isolatedCert],
+    requirementsCatalog: treeCatalog,
+  });
+  assert.ok(procSearchCollapsedHtml.includes('data-codigo="4.4"'));
+  assert.equal(procSearchCollapsedHtml.includes('data-codigo="4" '), false);
+  assert.equal(procSearchCollapsedHtml.includes('data-codigo="4.4.1"'), false);
+
+  const procSearchExpandedHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: resolvedProc.id,
+      activeChildTab: 'requisitos',
+      isAssigningRequisito: true,
+      batchMode: 'all',
+      batchFilterQuery: '4.4',
+      searchExpandedBatchClauseIds: [req44.id],
+      selectedBatchRequisitoIds: [],
+    },
+    proceso: resolvedProc,
+    certificates: [isolatedCert],
+    requirementsCatalog: treeCatalog,
+  });
+  assert.ok(procSearchExpandedHtml.includes('data-codigo="4.4"'));
+  assert.ok(procSearchExpandedHtml.includes('data-codigo="4.4.1"'));
+  // Title-less 4.4.1 renders without colon
+  assert.equal(procSearchExpandedHtml.includes('4.4.1</span>:'), false);
+
+  // 3. Non-Applicable picker mirrors same hierarchy, default collapse of 4.4.1, search retention, and expansion
+  const naDefaultHtml = renderNoAplicableView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedNoAplicableId: null,
+      originatingCertId: isolatedCert.id,
+      isCreating: true,
+      isEditingAttributes: false,
+      formDraft: { id_certificado: isolatedCert.id, id_requisito: '', justificacion: '' },
+      clauseMode: 'all',
+      clauseFilterQuery: '',
+    },
+    noAplicable: null,
+    certificates: [isolatedCert],
+    requirementsCatalog: treeCatalog,
+  });
+  assert.ok(naDefaultHtml.includes('data-codigo="4"'));
+  assert.ok(naDefaultHtml.includes('data-codigo="4.4"'));
+  assert.equal(naDefaultHtml.includes('data-codigo="4.4.1"'), false);
+  assert.ok(naDefaultHtml.includes('data-action="toggle-no-aplicable-clause-node"'));
+  assert.ok(naDefaultHtml.includes('data-action="set-no-aplicable-clause-mode"'));
+
+  const naSearchRows = buildNoAplicablePickerRows({
+    cert: isolatedCert,
+    requirementsCatalog: treeCatalog,
+    mode: 'all',
+    filterQuery: '4.4',
+  });
+  const naSearchCollapsed = renderNoAplicableChecklistRowsHtml({
+    rows: naSearchRows,
+    selectedReqId: '',
+  });
+  assert.ok(naSearchCollapsed.includes('data-codigo="4.4"'));
+  assert.equal(naSearchCollapsed.includes('data-codigo="4.4.1"'), false);
+
+  const naSearchExpanded = renderNoAplicableChecklistRowsHtml({
+    rows: naSearchRows,
+    selectedReqId: '',
+    expandedClauseIds: [req44.id],
+  });
+  assert.ok(naSearchExpanded.includes('data-codigo="4.4"'));
+  assert.ok(naSearchExpanded.includes('data-codigo="4.4.1"'));
+  assert.equal(assertZeroUuidExposure(procDefaultHtml).compliant, true);
+  assert.equal(assertZeroUuidExposure(naDefaultHtml).compliant, true);
+});
+

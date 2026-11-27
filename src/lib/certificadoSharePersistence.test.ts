@@ -1053,7 +1053,12 @@ test('Structural Contract: Step 2.4 persistence & hydration files maintain 0 any
   assert.match(mainSrc, /turno_certificado_compartido/);
   assert.match(mainSrc, /proceso_certificado_compartido/);
   assert.match(mainSrc, /sitio_certificado_compartido/);
-  assert.match(mainSrc, /onConflict:\s*'id_proceso,id_certificado,id_requisito'/);
+  assert.match(mainSrc, /onConflict:\s*'id_proceso,id_certificado_version,id_requisito'/);
+  assert.equal(
+    /onConflict:\s*'id_proceso,id_certificado,id_requisito'/.test(mainSrc),
+    false,
+    'src/main.ts must never use legacy non-versioned requisitos_por_proceso ON CONFLICT key'
+  );
 });
 
 test('Step 1.2: persistShareProcesos persists sincronizar_requisitos on both insert and soft-delete restore', async () => {

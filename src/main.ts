@@ -3635,6 +3635,8 @@ function clearAllEntitySelections(): void {
   state.procesoDomain.batchFilterQuery = '';
   state.procesoDomain.batchMode = 'mandatory';
   state.procesoDomain.selectedBatchRequisitoIds = [];
+  state.procesoDomain.expandedBatchClauseIds = undefined;
+  state.procesoDomain.searchExpandedBatchClauseIds = undefined;
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
@@ -3656,6 +3658,10 @@ function clearAllEntitySelections(): void {
   state.noAplicableDomain.editErrorMessage = null;
   state.noAplicableDomain.archiveConfirmOpen = false;
   state.noAplicableDomain.archiveErrorMessage = null;
+  state.noAplicableDomain.clauseFilterQuery = '';
+  state.noAplicableDomain.clauseMode = 'all';
+  state.noAplicableDomain.expandedClauseIds = undefined;
+  state.noAplicableDomain.searchExpandedClauseIds = undefined;
 
   state.fechaDomain.selectedFechaId = null;
   state.fechaDomain.originatingCertId = null;
@@ -20323,6 +20329,8 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.batchFilterQuery = '';
     state.procesoDomain.batchMode = 'mandatory';
     state.procesoDomain.selectedBatchRequisitoIds = [];
+    state.procesoDomain.expandedBatchClauseIds = undefined;
+    state.procesoDomain.searchExpandedBatchClauseIds = undefined;
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `proceso-${procesoId}`,
@@ -20370,6 +20378,8 @@ function bindAuthenticatedEvents(): void {
           batchFilterQuery: '',
           batchMode: 'mandatory',
           selectedBatchRequisitoIds: [],
+          expandedBatchClauseIds: undefined,
+          searchExpandedBatchClauseIds: undefined,
           childSortState: state.procesoDomain.childSortState,
         };
 
@@ -20528,6 +20538,7 @@ function bindAuthenticatedEvents(): void {
     if (!procesoId) return;
     const currentProceso = resolveProcesoDetailById({
       procesoId,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       phase5Findings: state.domainData.phase5Findings,
@@ -20536,6 +20547,7 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentProceso) return;
 
+    const existingSharedContext = state.procesoDomain.editFormData?.sharedContext;
     state.procesoDomain.isCreating = false;
     state.procesoDomain.isEditingAttributes = true;
     state.procesoDomain.archiveConfirmOpen = false;
@@ -20543,6 +20555,7 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.archiveErrorMessage = null;
     state.procesoDomain.formDraft = createProcesoFormDraftFromEntity(currentProceso);
     state.procesoDomain.editFormData = {
+      ...(existingSharedContext ? { sharedContext: existingSharedContext } : {}),
       id_certificado: currentProceso.id_certificado,
       nombre_proceso: currentProceso.nombre_proceso,
       tipo: currentProceso.tipo,
@@ -20705,6 +20718,7 @@ function bindAuthenticatedEvents(): void {
 
     const currentProceso = resolveProcesoDetailById({
       procesoId: procesoId!,
+      activeCertId: resolveActiveCertIdFromContext(),
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       phase5Findings: state.domainData.phase5Findings,
@@ -20738,17 +20752,25 @@ function bindAuthenticatedEvents(): void {
     }
 
     const certChanged = normProc.id_certificado !== currentProceso.id_certificado;
+    const sourceCertObj = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === currentProceso.id_certificado
+    );
+    const existingRawProc = sourceCertObj?.procesos.find((p) => p.id === procesoId);
+    const preservedOwnerCertId =
+      !certChanged && existingRawProc?.ownerCertId
+        ? existingRawProc.ownerCertId
+        : normProc.id_certificado;
     const targetActiveVerId =
       targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
       targetCert.id_certificado_version ||
       '';
 
-    if (STRICT_UUID_PATTERN.test(procesoId!) && STRICT_UUID_PATTERN.test(normProc.id_certificado)) {
+    if (STRICT_UUID_PATTERN.test(procesoId!) && STRICT_UUID_PATTERN.test(preservedOwnerCertId)) {
       try {
         const { error } = await supabase
           .from('proceso')
           .update({
-            id_certificado: normProc.id_certificado,
+            id_certificado: preservedOwnerCertId,
             ...(certChanged && STRICT_UUID_PATTERN.test(targetActiveVerId)
               ? { id_certificado_version: targetActiveVerId }
               : {}),
@@ -20768,24 +20790,20 @@ function bindAuthenticatedEvents(): void {
     }
 
     const oldSnapshot = {
-      id_certificado: currentProceso.id_certificado,
+      id_certificado: preservedOwnerCertId,
       nombre_proceso: currentProceso.nombre_proceso,
       tipo: currentProceso.tipo,
       responsable: currentProceso.responsable || null,
     };
 
-    const sourceCertObj = state.domainData.allCertificadosDetailed.find(
-      (c) => c.id === currentProceso.id_certificado
-    );
-    const existingRawProc = sourceCertObj?.procesos.find((p) => p.id === procesoId);
     const updatedProcEntity: ProcessEntity = {
       ...(existingRawProc || {
         id: procesoId!,
-        id_certificado: normProc.id_certificado,
+        id_certificado: preservedOwnerCertId,
         clausulas_cubiertas: [],
         requisitos_detalle: [],
       }),
-      id_certificado: normProc.id_certificado,
+      id_certificado: preservedOwnerCertId,
       ...(certChanged && targetActiveVerId
         ? { id_certificado_version: targetActiveVerId }
         : existingRawProc?.id_certificado_version
@@ -20814,10 +20832,19 @@ function bindAuthenticatedEvents(): void {
         }
         return c;
       }
-      if (c.id !== currentProceso.id_certificado) return c;
+      if (!c.procesos.some((p) => p.id === procesoId)) return c;
       return syncActiveCertVersionSnapshot({
         ...c,
-        procesos: c.procesos.map((p) => (p.id === procesoId ? updatedProcEntity : p)),
+        procesos: c.procesos.map((p) =>
+          p.id === procesoId
+            ? {
+                ...p,
+                nombre_proceso: normProc.nombre_proceso,
+                tipo: normProc.tipo,
+                responsable: normProc.responsable,
+              }
+            : p
+        ),
       });
     });
 
@@ -21015,10 +21042,46 @@ function bindAuthenticatedEvents(): void {
         if (!nextOpen) {
           state.procesoDomain.batchFilterQuery = '';
           state.procesoDomain.selectedBatchRequisitoIds = [];
+          state.procesoDomain.expandedBatchClauseIds = undefined;
+          state.procesoDomain.searchExpandedBatchClauseIds = undefined;
         }
         render();
       });
     });
+
+  const resolveCertActiveVersionIdForDb = async (
+    certId: string,
+    certObj?: CertificadoDetailEntity
+  ): Promise<string | null> => {
+    const resolvedCert =
+      certObj || state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
+    const localVerId = (
+      resolvedCert?.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      resolvedCert?.id_certificado_version ||
+      ''
+    ).trim();
+    if (STRICT_UUID_PATTERN.test(localVerId)) {
+      return localVerId;
+    }
+    if (!STRICT_UUID_PATTERN.test(certId)) {
+      return null;
+    }
+    try {
+      const { data: verRow } = await supabase
+        .from('certificado_version')
+        .select('id')
+        .eq('id_certificado', certId)
+        .is('deleted_at', null)
+        .order('es_version_actual', { ascending: false })
+        .order('version_numero', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const dbVerId = verRow?.id ? String(verRow.id).trim() : '';
+      return STRICT_UUID_PATTERN.test(dbVerId) ? dbVerId : null;
+    } catch {
+      return null;
+    }
+  };
 
   const ensureRequisitoInDb = async (
     targetReq: RequisitoLtree,
@@ -21110,6 +21173,12 @@ function bindAuthenticatedEvents(): void {
     if (reqsToAdd.length === 0) return;
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== targetCertId) return c;
+      const activeVerId = (
+        c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        c.id_certificado_version ||
+        ''
+      ).trim();
+      const versionKey = activeVerId ? `${targetCertId}:${activeVerId}` : '';
       return syncActiveCertVersionSnapshot({
         ...c,
         procesos: c.procesos.map((p) => {
@@ -21129,18 +21198,26 @@ function bindAuthenticatedEvents(): void {
             }
           }
           const prevEntry = p.requisitos_by_certificado?.[targetCertId];
-          const nextByCert = p.requisitos_by_certificado
-            ? {
-                ...p.requisitos_by_certificado,
-                [targetCertId]: {
-                  ...(prevEntry?.sincronizar_requisitos !== undefined
-                    ? { sincronizar_requisitos: prevEntry.sincronizar_requisitos }
-                    : {}),
-                  clausulas_cubiertas: nextCodes,
-                  requisitos_detalle: nextDetails,
-                },
-              }
+          const prevVersionEntry = versionKey
+            ? p.requisitos_by_certificado?.[versionKey]
             : undefined;
+          const preservedSyncFlag =
+            prevVersionEntry?.sincronizar_requisitos ?? prevEntry?.sincronizar_requisitos;
+          const updatedCertEntry = {
+            ...(preservedSyncFlag !== undefined
+              ? { sincronizar_requisitos: preservedSyncFlag }
+              : {}),
+            clausulas_cubiertas: nextCodes,
+            requisitos_detalle: nextDetails,
+          };
+          const nextByCert =
+            p.requisitos_by_certificado || versionKey
+              ? {
+                  ...(p.requisitos_by_certificado || {}),
+                  [targetCertId]: updatedCertEntry,
+                  ...(versionKey ? { [versionKey]: updatedCertEntry } : {}),
+                }
+              : undefined;
           return {
             ...p,
             clausulas_cubiertas: nextCodes,
@@ -21210,6 +21287,12 @@ function bindAuthenticatedEvents(): void {
     const removeSet = new Set(codesToRemove.map((c) => c.trim().toLowerCase()));
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== targetCertId) return c;
+      const activeVerId = (
+        c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        c.id_certificado_version ||
+        ''
+      ).trim();
+      const versionKey = activeVerId ? `${targetCertId}:${activeVerId}` : '';
       return syncActiveCertVersionSnapshot({
         ...c,
         procesos: c.procesos.map((p) => {
@@ -21221,18 +21304,26 @@ function bindAuthenticatedEvents(): void {
             (d) => !removeSet.has(d.codigo.trim().toLowerCase())
           );
           const prevEntry = p.requisitos_by_certificado?.[targetCertId];
-          const nextByCert = p.requisitos_by_certificado
-            ? {
-                ...p.requisitos_by_certificado,
-                [targetCertId]: {
-                  ...(prevEntry?.sincronizar_requisitos !== undefined
-                    ? { sincronizar_requisitos: prevEntry.sincronizar_requisitos }
-                    : {}),
-                  clausulas_cubiertas: nextCodes,
-                  requisitos_detalle: nextDetails,
-                },
-              }
+          const prevVersionEntry = versionKey
+            ? p.requisitos_by_certificado?.[versionKey]
             : undefined;
+          const preservedSyncFlag =
+            prevVersionEntry?.sincronizar_requisitos ?? prevEntry?.sincronizar_requisitos;
+          const updatedCertEntry = {
+            ...(preservedSyncFlag !== undefined
+              ? { sincronizar_requisitos: preservedSyncFlag }
+              : {}),
+            clausulas_cubiertas: nextCodes,
+            requisitos_detalle: nextDetails,
+          };
+          const nextByCert =
+            p.requisitos_by_certificado || versionKey
+              ? {
+                  ...(p.requisitos_by_certificado || {}),
+                  [targetCertId]: updatedCertEntry,
+                  ...(versionKey ? { [versionKey]: updatedCertEntry } : {}),
+                }
+              : undefined;
           return {
             ...p,
             clausulas_cubiertas: nextCodes,
@@ -21345,14 +21436,21 @@ function bindAuthenticatedEvents(): void {
       const targetCertId = currentProceso.id_certificado;
       void (async () => {
         try {
-          const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+          const [dbReqId, targetCertVerId] = await Promise.all([
+            ensureRequisitoInDb(req, catalogSnapshot),
+            resolveCertActiveVersionIdForDb(targetCertId, parentCert),
+          ]);
           const { error } = await supabase.from('requisitos_por_proceso').upsert(
             {
               id_proceso: procesoId,
               id_certificado: targetCertId,
+              ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
               id_requisito: dbReqId,
             },
-            { onConflict: 'id_proceso,id_certificado,id_requisito', ignoreDuplicates: true }
+            {
+              onConflict: 'id_proceso,id_certificado_version,id_requisito',
+              ignoreDuplicates: true,
+            }
           );
           if (error && !isMissingTableOrSchemaError(error)) {
             rollbackProcesoRequirementsInClientState(targetCertId, procesoId, [
@@ -21446,15 +21544,60 @@ function bindAuthenticatedEvents(): void {
       });
   };
 
-  bindProcesoBatchCheckboxListeners();
+  const bindProcesoBatchToggleListeners = (): void => {
+    document
+      .querySelectorAll<HTMLButtonElement>(
+        '#procesoBatchChecklistContainer [data-action="toggle-proceso-batch-node"]'
+      )
+      .forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const nodeId = (btn.dataset.nodeId || '').trim();
+          if (!nodeId) return;
+          const ctx = resolveActiveProcesoContext();
+          if (!ctx) return;
+          const isSearching = (state.procesoDomain.batchFilterQuery || '').trim().length > 0;
+          const pickerData = buildProcesoBatchPickerRows({
+            cert: ctx.parentCert,
+            currentProceso: ctx.currentProceso,
+            idNorma: ctx.currentProceso.id_norma,
+            normaCodigo: ctx.currentProceso.norma_codigo,
+            requirementsCatalog: ctx.catalogSnapshot,
+            mode: state.procesoDomain.batchMode || 'mandatory',
+            filterQuery: state.procesoDomain.batchFilterQuery || '',
+            archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+            archivedProcesoIds: state.domainData.archivedProcesoIds,
+          });
+          const currentIds = isSearching
+            ? state.procesoDomain.searchExpandedBatchClauseIds ??
+              getDefaultExpandedClauseIds(pickerData.rows)
+            : state.procesoDomain.expandedBatchClauseIds ??
+              getDefaultExpandedClauseIds(pickerData.rows);
+          const nextSet = new Set(currentIds);
+          if (nextSet.has(nodeId)) {
+            nextSet.delete(nodeId);
+          } else {
+            nextSet.add(nodeId);
+          }
+          if (isSearching) {
+            state.procesoDomain.searchExpandedBatchClauseIds = Array.from(nextSet);
+          } else {
+            state.procesoDomain.expandedBatchClauseIds = Array.from(nextSet);
+          }
+          renderProcesoBatchChecklistInDom(true);
+        });
+      });
+  };
 
-  document.getElementById('procesoBatchFilterInput')?.addEventListener('input', (ev) => {
-    const query = (ev.target as HTMLInputElement).value;
-    state.procesoDomain.batchFilterQuery = query;
+  const renderProcesoBatchChecklistInDom = (preserveScroll: boolean): void => {
     const ctx = resolveActiveProcesoContext();
     const container = document.getElementById('procesoBatchChecklistContainer');
     if (!ctx || !container) return;
 
+    const prevScrollTop = preserveScroll ? container.scrollTop : 0;
+    const filterQuery = state.procesoDomain.batchFilterQuery || '';
+    const isSearching = filterQuery.trim().length > 0;
     const pickerData = buildProcesoBatchPickerRows({
       cert: ctx.parentCert,
       currentProceso: ctx.currentProceso,
@@ -21462,16 +21605,34 @@ function bindAuthenticatedEvents(): void {
       normaCodigo: ctx.currentProceso.norma_codigo,
       requirementsCatalog: ctx.catalogSnapshot,
       mode: state.procesoDomain.batchMode || 'mandatory',
-      filterQuery: query,
+      filterQuery,
       archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
       archivedProcesoIds: state.domainData.archivedProcesoIds,
     });
     container.innerHTML = renderProcesoBatchChecklistRowsHtml({
       rows: pickerData.rows,
       selectedIdSet: new Set(state.procesoDomain.selectedBatchRequisitoIds || []),
+      expandedBatchClauseIds: isSearching
+        ? state.procesoDomain.searchExpandedBatchClauseIds
+        : state.procesoDomain.expandedBatchClauseIds,
+      filterQuery,
     });
+    if (preserveScroll) {
+      container.scrollTop = prevScrollTop;
+    }
     bindProcesoBatchCheckboxListeners();
+    bindProcesoBatchToggleListeners();
     refreshProcesoBatchSummaryInDom();
+  };
+
+  bindProcesoBatchCheckboxListeners();
+  bindProcesoBatchToggleListeners();
+
+  document.getElementById('procesoBatchFilterInput')?.addEventListener('input', (ev) => {
+    const query = (ev.target as HTMLInputElement).value;
+    state.procesoDomain.batchFilterQuery = query;
+    state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+    renderProcesoBatchChecklistInDom(false);
   });
 
   document
@@ -21481,6 +21642,7 @@ function bindAuthenticatedEvents(): void {
         const modeAttr = btn.dataset.batchMode;
         if (modeAttr === 'mandatory' || modeAttr === 'pending' || modeAttr === 'all') {
           state.procesoDomain.batchMode = modeAttr as ProcesoBatchMode;
+          state.procesoDomain.searchExpandedBatchClauseIds = undefined;
           render();
         }
       });
@@ -21628,6 +21790,8 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.isAssigningRequisito = false;
     state.procesoDomain.batchFilterQuery = '';
     state.procesoDomain.selectedBatchRequisitoIds = [];
+    state.procesoDomain.expandedBatchClauseIds = undefined;
+    state.procesoDomain.searchExpandedBatchClauseIds = undefined;
     showFloatingToast(
       `${delta.toInsert.length} cláusula(s) vinculadas correctamente a "${currentProceso.nombre_proceso}".`,
       'success'
@@ -21642,9 +21806,11 @@ function bindAuthenticatedEvents(): void {
       const targetCertId = currentProceso.id_certificado;
       void (async () => {
         try {
+          const targetCertVerId = await resolveCertActiveVersionIdForDb(targetCertId, parentCert);
           const upsertRows: Array<{
             id_proceso: string;
             id_certificado: string;
+            id_certificado_version?: string;
             id_requisito: string;
           }> = [];
           for (const item of persistableReqs) {
@@ -21653,6 +21819,7 @@ function bindAuthenticatedEvents(): void {
               upsertRows.push({
                 id_proceso: procesoId,
                 id_certificado: targetCertId,
+                ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
                 id_requisito: dbReqId,
               });
             }
@@ -21661,7 +21828,7 @@ function bindAuthenticatedEvents(): void {
             const { error } = await supabase
               .from('requisitos_por_proceso')
               .upsert(upsertRows, {
-                onConflict: 'id_proceso,id_certificado,id_requisito',
+                onConflict: 'id_proceso,id_certificado_version,id_requisito',
                 ignoreDuplicates: true,
               });
             if (error && !isMissingTableOrSchemaError(error)) {
@@ -21675,8 +21842,15 @@ function bindAuthenticatedEvents(): void {
               render();
             }
           }
-        } catch {
-          // Optimistic reactive fallback preserved
+        } catch (err) {
+          rollbackProcesoRequirementsInClientState(
+            targetCertId,
+            procesoId,
+            persistableReqs.map((r) => r.codigo)
+          );
+          showFloatingToast(translateProcesoDbError(err), 'warning');
+          void loadLiveCertificates();
+          render();
         }
       })();
     }
@@ -21739,14 +21913,21 @@ function bindAuthenticatedEvents(): void {
             }
           }
           if (STRICT_UUID_PATTERN.test(targetReqId)) {
-            await supabase
+            const targetCertVerId = await resolveCertActiveVersionIdForDb(targetCertId);
+            const { error: delErr } = await supabase
               .from('requisitos_por_proceso')
               .delete()
               .match({
                 id_proceso: procesoId,
                 id_certificado: targetCertId,
+                ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
                 id_requisito: targetReqId,
               });
+            if (delErr && !isMissingTableOrSchemaError(delErr)) {
+              showFloatingToast(translateProcesoDbError(delErr), 'warning');
+              void loadLiveCertificates();
+              render();
+            }
           }
         } catch {
           // Optimistic reactive fallback preserved
@@ -27202,6 +27383,10 @@ function bindAuthenticatedEvents(): void {
           editErrorMessage: null,
           archiveConfirmOpen: false,
           archiveErrorMessage: null,
+          clauseFilterQuery: '',
+          clauseMode: 'all',
+          expandedClauseIds: undefined,
+          searchExpandedClauseIds: undefined,
         };
 
         state.breadcrumbs = pushBreadcrumb(
@@ -27391,14 +27576,21 @@ function bindAuthenticatedEvents(): void {
         ) {
           void (async () => {
             try {
-              const dbReqId = await ensureRequisitoInDb(req, catalogSnapshot);
+              const [dbReqId, targetCertVerId] = await Promise.all([
+                ensureRequisitoInDb(req, catalogSnapshot),
+                resolveCertActiveVersionIdForDb(certId, parentCert),
+              ]);
               const { error } = await supabase.from('requisitos_por_proceso').upsert(
                 {
                   id_proceso: procesoId,
                   id_certificado: certId,
+                  ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
                   id_requisito: dbReqId,
                 },
-                { onConflict: 'id_proceso,id_certificado,id_requisito', ignoreDuplicates: true }
+                {
+                  onConflict: 'id_proceso,id_certificado_version,id_requisito',
+                  ignoreDuplicates: true,
+                }
               );
               if (error && !isMissingTableOrSchemaError(error)) {
                 rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
@@ -27452,6 +27644,10 @@ function bindAuthenticatedEvents(): void {
           editErrorMessage: null,
           archiveConfirmOpen: false,
           archiveErrorMessage: null,
+          clauseFilterQuery: '',
+          clauseMode: 'all',
+          expandedClauseIds: undefined,
+          searchExpandedClauseIds: undefined,
         };
 
         state.breadcrumbs = pushBreadcrumb(
@@ -27476,14 +27672,154 @@ function bindAuthenticatedEvents(): void {
 
   const readNoAplicableFormDraftFromDom = (): NoAplicableFormDraft => {
     const certSelect = document.getElementById('naSelectCertificado') as HTMLSelectElement | null;
-    const reqSelect = document.getElementById('naSelectRequisito') as HTMLSelectElement | null;
+    const reqInput = document.getElementById('naSelectRequisito') as
+      | HTMLInputElement
+      | HTMLSelectElement
+      | null;
+    const checkedRadio = document.querySelector<HTMLInputElement>(
+      '#naClauseChecklistContainer input[name="na_picker_requisito"]:checked'
+    );
     const justInput = document.getElementById('naJustificacionInput') as HTMLTextAreaElement | null;
     return {
       id_certificado: certSelect?.value || state.noAplicableDomain.formDraft?.id_certificado || '',
-      id_requisito: reqSelect?.value || state.noAplicableDomain.formDraft?.id_requisito || '',
+      id_requisito:
+        checkedRadio?.value ||
+        reqInput?.value ||
+        state.noAplicableDomain.formDraft?.id_requisito ||
+        '',
       justificacion: justInput?.value ?? state.noAplicableDomain.formDraft?.justificacion ?? '',
     };
   };
+
+  const resolveActiveNoAplicablePickerData = () => {
+    const draft = readNoAplicableFormDraftFromDom();
+    const selectedCert = state.domainData.allCertificadosDetailed.find(
+      (c) => c.id === draft.id_certificado
+    );
+    if (!selectedCert) return null;
+    const reqCatalog = getEffectiveRequirementsCatalog();
+    const currentNaId = state.noAplicableDomain.isEditingAttributes
+      ? state.noAplicableDomain.selectedNoAplicableId
+      : null;
+    const filterQuery = state.noAplicableDomain.clauseFilterQuery || '';
+    const mode: NoAplicableClauseMode = state.noAplicableDomain.clauseMode || 'all';
+    const pickerRows = buildNoAplicablePickerRows({
+      cert: selectedCert,
+      requirementsCatalog: reqCatalog,
+      currentNoAplicableId: currentNaId,
+      mode,
+      filterQuery,
+      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+      archivedProcesoIds: state.domainData.archivedProcesoIds,
+    });
+    return { draft, selectedCert, pickerRows, filterQuery };
+  };
+
+  const renderNoAplicableChecklistInDom = (preserveScroll: boolean): void => {
+    const container = document.getElementById('naClauseChecklistContainer');
+    const resolved = resolveActiveNoAplicablePickerData();
+    if (!container || !resolved) return;
+
+    const prevScrollTop = preserveScroll ? container.scrollTop : 0;
+    const isSearching = resolved.filterQuery.trim().length > 0;
+    container.innerHTML = renderNoAplicableChecklistRowsHtml({
+      rows: resolved.pickerRows,
+      selectedReqId: resolved.draft.id_requisito,
+      expandedClauseIds: isSearching
+        ? state.noAplicableDomain.searchExpandedClauseIds
+        : state.noAplicableDomain.expandedClauseIds,
+    });
+    if (preserveScroll) {
+      container.scrollTop = prevScrollTop;
+    }
+    bindNoAplicablePickerRowListeners();
+  };
+
+  const bindNoAplicablePickerRowListeners = (): void => {
+    document
+      .querySelectorAll<HTMLButtonElement>(
+        '#naClauseChecklistContainer [data-action="toggle-no-aplicable-clause-node"]'
+      )
+      .forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const nodeId = (btn.dataset.nodeId || '').trim();
+          if (!nodeId) return;
+          const resolved = resolveActiveNoAplicablePickerData();
+          if (!resolved) return;
+          state.noAplicableDomain.formDraft = resolved.draft;
+          const isSearching = resolved.filterQuery.trim().length > 0;
+          const currentIds = isSearching
+            ? state.noAplicableDomain.searchExpandedClauseIds ??
+              getDefaultExpandedClauseIds(resolved.pickerRows)
+            : state.noAplicableDomain.expandedClauseIds ??
+              getDefaultExpandedClauseIds(resolved.pickerRows);
+          const nextSet = new Set(currentIds);
+          if (nextSet.has(nodeId)) {
+            nextSet.delete(nodeId);
+          } else {
+            nextSet.add(nodeId);
+          }
+          if (isSearching) {
+            state.noAplicableDomain.searchExpandedClauseIds = Array.from(nextSet);
+          } else {
+            state.noAplicableDomain.expandedClauseIds = Array.from(nextSet);
+          }
+          renderNoAplicableChecklistInDom(true);
+        });
+      });
+
+    document
+      .querySelectorAll<HTMLInputElement>(
+        '#naClauseChecklistContainer input[name="na_picker_requisito"]'
+      )
+      .forEach((radio) => {
+        radio.addEventListener('change', () => {
+          if (!radio.checked) return;
+          const hiddenReq = document.getElementById('naSelectRequisito') as HTMLInputElement | null;
+          if (hiddenReq) {
+            hiddenReq.value = radio.value;
+          }
+          const prevScrollTop =
+            document.getElementById('naClauseChecklistContainer')?.scrollTop ?? 0;
+          state.noAplicableDomain.formDraft = {
+            ...readNoAplicableFormDraftFromDom(),
+            id_requisito: radio.value,
+          };
+          state.noAplicableDomain.editErrorMessage = null;
+          render();
+          const nextContainer = document.getElementById('naClauseChecklistContainer');
+          if (nextContainer) {
+            nextContainer.scrollTop = prevScrollTop;
+          }
+        });
+      });
+  };
+
+  bindNoAplicablePickerRowListeners();
+
+  document.getElementById('naClauseFilterInput')?.addEventListener('input', (ev) => {
+    const query = (ev.target as HTMLInputElement).value;
+    state.noAplicableDomain.formDraft = readNoAplicableFormDraftFromDom();
+    state.noAplicableDomain.clauseFilterQuery = query;
+    state.noAplicableDomain.searchExpandedClauseIds = undefined;
+    renderNoAplicableChecklistInDom(false);
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-no-aplicable-clause-mode"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const modeAttr = btn.dataset.naMode;
+        if (modeAttr === 'all' || modeAttr === 'in_use' || modeAttr === 'pending') {
+          state.noAplicableDomain.formDraft = readNoAplicableFormDraftFromDom();
+          state.noAplicableDomain.clauseMode = modeAttr as NoAplicableClauseMode;
+          state.noAplicableDomain.searchExpandedClauseIds = undefined;
+          render();
+        }
+      });
+    });
 
   document.getElementById('naSelectCertificado')?.addEventListener('change', (e) => {
     const nextCertId = (e.target as HTMLSelectElement).value;
@@ -27501,6 +27837,10 @@ function bindAuthenticatedEvents(): void {
         : null,
       archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
     });
+    state.noAplicableDomain.clauseFilterQuery = '';
+    state.noAplicableDomain.clauseMode = 'all';
+    state.noAplicableDomain.expandedClauseIds = undefined;
+    state.noAplicableDomain.searchExpandedClauseIds = undefined;
     state.noAplicableDomain.editErrorMessage = null;
     render();
   });
@@ -27544,6 +27884,10 @@ function bindAuthenticatedEvents(): void {
     state.noAplicableDomain.isEditingAttributes = true;
     state.noAplicableDomain.editErrorMessage = null;
     state.noAplicableDomain.archiveErrorMessage = null;
+    state.noAplicableDomain.clauseFilterQuery = '';
+    state.noAplicableDomain.clauseMode = 'all';
+    state.noAplicableDomain.expandedClauseIds = undefined;
+    state.noAplicableDomain.searchExpandedClauseIds = undefined;
     state.noAplicableDomain.formDraft = createNoAplicableFormDraftFromEntity(current);
     render();
   });
@@ -36843,6 +37187,30 @@ async function loadLiveCertificates(): Promise<void> {
           })
         : [];
 
+    const rawCertVersions: RawCertificadoVersionRow[] =
+      !certVersionsRes.error && Array.isArray(certVersionsRes.data)
+        ? (certVersionsRes.data as unknown as RawCertificadoVersionRow[])
+        : [];
+
+    const activeVersionIdByCertId = new Map<string, string>();
+    const certVersionsGrouped = new Map<string, RawCertificadoVersionRow[]>();
+    for (const ver of rawCertVersions) {
+      if (ver.deleted_at) continue;
+      const cid = String(ver.id_certificado || '').trim();
+      if (!cid) continue;
+      const list = certVersionsGrouped.get(cid) || [];
+      list.push(ver);
+      certVersionsGrouped.set(cid, list);
+    }
+    for (const [cid, list] of certVersionsGrouped.entries()) {
+      const preferred =
+        list.find((v) => Boolean(v.es_version_actual)) ||
+        [...list].sort((a, b) => Number(b.version_numero || 0) - Number(a.version_numero || 0))[0];
+      if (preferred?.id) {
+        activeVersionIdByCertId.set(cid, String(preferred.id));
+      }
+    }
+
     const { contactosByCert, sitiosByCert, procesosByCert, turnosByCert } =
       assembleSharedCertificateCollections({
         visibleCerts: visibleCertMeta,
@@ -36891,6 +37259,7 @@ async function loadLiveCertificates(): Promise<void> {
             : [],
         shiftCatalog: state.domainData.shiftCatalog,
         formatTurnoTime,
+        activeVersionIdByCertId,
       });
 
     const alcanceByCertId = !alcancesRes.error
@@ -36931,10 +37300,6 @@ async function loadLiveCertificates(): Promise<void> {
       ])
     );
     const subsectorById = new Map(state.domainData.iafSubsectors.map((sub) => [sub.id, sub]));
-    const rawCertVersions: RawCertificadoVersionRow[] =
-      !certVersionsRes.error && Array.isArray(certVersionsRes.data)
-        ? (certVersionsRes.data as unknown as RawCertificadoVersionRow[])
-        : [];
 
     if (!error && Array.isArray(data) && data.length > 0) {
       const existingById = new Map<string, CertificadoDetailEntity>();

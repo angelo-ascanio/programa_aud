@@ -288,3 +288,77 @@ test('Step 1.3 procesoView: displays same-norm sync controls + diff-norm indepen
   assert.equal(clientHtml.includes('data-action="sync-shared-proceso-reqs"'), false);
   assert.equal(assertZeroUuidExposure(clientHtml).compliant, true);
 });
+
+test('Step 1.3 procesoView: receiving shared certificates (same-norm independent & diff-norm) allow full clause CRUD on their own standard', () => {
+  const catalog = getAllSeededNormaRequirements();
+  const certs = buildFixtureCerts(false);
+
+  // Receiving cert C uses ISO 14001:2015 (different norm from owner ISO 9001:2015)
+  const procInDiffNormCert = resolveProcesoDetailById({
+    procesoId: PROC_ID,
+    activeCertId: CERT_C_DIFF_ID,
+    certificates: certs,
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: catalog,
+  });
+  assert.ok(procInDiffNormCert);
+  assert.equal(procInDiffNormCert.id_certificado, CERT_C_DIFF_ID);
+  assert.equal(procInDiffNormCert.norma_codigo, 'ISO 14001:2015');
+  // Never leaks owner's ISO 9001 clauses
+  assert.equal(procInDiffNormCert.requisitos.length, 0);
+
+  const diffNormBatchHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: PROC_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_C_DIFF_ID,
+      isEditingAttributes: false,
+      isAssigningRequisito: true,
+      batchMode: 'all',
+    },
+    proceso: procInDiffNormCert,
+    activeCertId: CERT_C_DIFF_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(diffNormBatchHtml.includes('Selector Jerárquico de Subárboles (ISO 14001:2015)'));
+  assert.ok(diffNormBatchHtml.includes('id="submitProcesoBatchBtn"'));
+  assert.ok(diffNormBatchHtml.includes('Vincular Seleccionadas'));
+  assert.equal(assertZeroUuidExposure(diffNormBatchHtml).compliant, true);
+
+  // Receiving cert B uses ISO 9001:2015 (same norm, independent)
+  const procInSameNormCert = resolveProcesoDetailById({
+    procesoId: PROC_ID,
+    activeCertId: CERT_B_SAME_ID,
+    certificates: certs,
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: catalog,
+  });
+  assert.ok(procInSameNormCert);
+  assert.equal(procInSameNormCert.id_certificado, CERT_B_SAME_ID);
+
+  const sameNormBatchHtml = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: PROC_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_B_SAME_ID,
+      isEditingAttributes: false,
+      isAssigningRequisito: true,
+      batchMode: 'all',
+    },
+    proceso: procInSameNormCert,
+    activeCertId: CERT_B_SAME_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+
+  assert.ok(sameNormBatchHtml.includes('Selector Jerárquico de Subárboles (ISO 9001:2015)'));
+  assert.ok(sameNormBatchHtml.includes('id="submitProcesoBatchBtn"'));
+  assert.equal(assertZeroUuidExposure(sameNormBatchHtml).compliant, true);
+});
+
