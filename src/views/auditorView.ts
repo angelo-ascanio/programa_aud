@@ -2,11 +2,23 @@ import { escapeHtml } from '../lib/html';
 import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
+  AUDITOR_CEDULA_MAX_LENGTH,
+  AUDITOR_EMAIL_MAX_LENGTH,
   AUDITOR_NOMBRE_MAX_LENGTH,
+  AUDITOR_PROFESION_MAX_LENGTH,
+  AUDITOR_SIGLAS_MAX_LENGTH,
+  AUDITOR_TELEFONO_MAX_LENGTH,
+  AUDITOR_TIPO_EMAIL_OPTIONS,
+  AUDITOR_TIPO_TELEFONO_OPTIONS,
+  AUDITOR_YEAR_MAX,
+  AUDITOR_YEAR_MIN,
   buildAuditorSearchableText,
   classifyAuditorObservacionSector,
   createAuditorDraftFromEntity,
+  createEmptyAuditorEmailDraft,
   createEmptyAuditorFormDraft,
+  createEmptyAuditorTelefonoDraft,
+  createEmptyEvaluacionInSituDraft,
   evaluateAuditorInSituStatus,
   extractAuditorComplementarySchemes,
   formatAuditorContactSummary,
@@ -15,19 +27,23 @@ import {
   getAuditorNormaLinks,
   getAuditorSectorLinks,
   getAuditorSubsectorLinks,
-  getQualificationStatusVisual,
   normalizeAuditorProfessionLabel,
   resolveAuditorInSituFacetBucket,
+  sortEvaluacionesInSituChronological,
   summarizeAuditorSectorCoverage,
   type AuditorChildTab,
   type AuditorDetailEntity,
   type AuditorDetailMode,
+  type AuditorEmailFormDraft,
   type AuditorFormDraft,
   type AuditoriaRealizadaEntity,
   type AuditorNormaLink,
   type AuditorSectorLink,
   type AuditorSubsectorLink,
+  type AuditorTelefonoFormDraft,
   type AuditorViewState,
+  type EvaluacionInSituAuditorEntity,
+  type EvaluacionInSituFormDraft,
 } from '../lib/competencyMatrix';
 import type { NormaEntity, SectorIafEntity, SubsectorIafEntity } from '../lib/extraDomain';
 import {
@@ -68,6 +84,7 @@ export interface AuditorViewProps {
   archiveConfig?: ArchiveMultiViewConfig;
   columnWidths?: Record<string, number>;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  authUserEmail?: string | null;
 }
 
 export function resolveAuditorDetailMode(
@@ -99,6 +116,7 @@ export function renderAuditorView(props: AuditorViewProps): string {
     archiveConfig,
     columnWidths,
     tableColumnWidths,
+    authUserEmail,
   } = props;
 
   const isStaff = isApprovedStaffProfile(profile);
@@ -115,6 +133,7 @@ export function renderAuditorView(props: AuditorViewProps): string {
         subsectores,
         isStaff,
         tableColumnWidths,
+        authUserEmail,
       });
     }
   }
@@ -710,7 +729,7 @@ function renderAuditorDirectory(props: {
 }
 
 /**
- * Standardized 3-Zone Detail Page Architecture ('read' | 'add' | 'edit') & Competency Matrix
+ * Standardized 3-Zone Detail Page Architecture ('read' | 'add' | 'edit') & 4 Child Tabs
  */
 function renderAuditorDetailPage(props: {
   profile: UserProfile;
@@ -721,6 +740,7 @@ function renderAuditorDetailPage(props: {
   subsectores: ReadonlyArray<SubsectorIafEntity>;
   isStaff: boolean;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  authUserEmail?: string | null;
 }): string {
   const {
     profile,
@@ -731,9 +751,12 @@ function renderAuditorDetailPage(props: {
     subsectores,
     isStaff,
     tableColumnWidths,
+    authUserEmail,
   } = props;
 
-  const mode = resolveAuditorDetailMode(state, isStaff, auditor);
+  const isArchivedAuditor = Boolean(auditor?.deleted_at);
+  const effectiveStaffForEdit = isStaff && !isArchivedAuditor;
+  const mode = resolveAuditorDetailMode(state, effectiveStaffForEdit, auditor);
   const isCreateMode = mode === 'add';
   const isReadOnly = mode === 'read';
 
@@ -751,12 +774,82 @@ function renderAuditorDetailPage(props: {
   const sectorLinks = auditor ? getAuditorSectorLinks(auditor, sectores) : [];
   const subsectorLinks = auditor ? getAuditorSubsectorLinks(auditor, subsectores) : [];
   const totalCompetencies = normaLinks.length + sectorLinks.length + subsectorLinks.length;
+  const activePhones = (auditor?.telefonos || []).filter((t) => !t.deleted_at);
+  const activeEmails = (auditor?.emails || []).filter((e) => !e.deleted_at);
+  const activeEvaluaciones = sortEvaluacionesInSituChronological(auditor?.evaluaciones_in_situ);
 
-  const statusVisual = getQualificationStatusVisual(auditor?.calificacion || 'Calificado');
-  const activeTab: AuditorChildTab = state.activeChildTab === 'historial' ? 'historial' : 'competencias';
+  const inSituStatus = auditor ? evaluateAuditorInSituStatus(auditor) : 'S/R';
+  const statusVisual = getAuditorInSituStatusVisual(inSituStatus);
 
-  const customTopActionsHtml = isStaff
-    ? renderDetailFormTopActions({
+  const activeTab: AuditorChildTab =
+    state.activeChildTab === 'contacto' ||
+    state.activeChildTab === 'evaluaciones' ||
+    state.activeChildTab === 'historial'
+      ? state.activeChildTab
+      : 'competencias';
+
+  const siglasVal = auditor ? (auditor.siglas || auditor.codigo_credencial || '').trim() : '';
+  const cedulaVal = auditor ? (auditor.cedula_identidad || '').trim() : '';
+  const profesionLabel = auditor
+    ? normalizeAuditorProfessionLabel(auditor.profesion || auditor.titulo_profesional)
+    : '';
+  const contactCount = activePhones.length + activeEmails.length;
+
+  const subtitleText = isCreateMode
+    ? 'Registro maestro de evaluador técnico en public.auditor conforme a ISO/IEC 17021-1:2015.'
+    : auditor
+    ? [
+        siglasVal,
+        cedulaVal ? `C.I. ${cedulaVal}` : '',
+        profesionLabel,
+        `${normaLinks.length} ${normaLinks.length === 1 ? 'norma' : 'normas'}`,
+        `${sectorLinks.length} ${sectorLinks.length === 1 ? 'sector IAF' : 'sectores IAF'}`,
+        `${contactCount} ${contactCount === 1 ? 'canal de contacto' : 'canales de contacto'}`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : undefined;
+
+  let customTopActionsHtml: string | undefined;
+  if (isStaff) {
+    if (!isCreateMode && auditor && isArchivedAuditor) {
+      const restoreBtnHtml =
+        profile.role === 'ADMIN'
+          ? `
+            <button
+              type="button"
+              data-action="restore-archived-record"
+              data-restore-table="auditor"
+              data-restore-id="${escapeHtml(auditor.id)}"
+              title="Restaurar auditor archivado"
+              aria-label="Restaurar"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs shrink-0"
+            >
+              <span aria-hidden="true">↺</span>
+              <span>Restaurar</span>
+            </button>
+          `
+          : '';
+      const historyBtnHtml = `
+        <button
+          type="button"
+          data-action="open-changelog"
+          data-table-name="auditor"
+          data-record-id="${escapeHtml(auditor.id)}"
+          data-entity-name="${escapeHtml(auditor.nombre)}"
+          title="Historial de Cambios"
+          aria-label="Historial de Cambios"
+          class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-2xs transition-colors cursor-pointer shrink-0"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 7 12 12 15.5 14" />
+          </svg>
+        </button>
+      `;
+      customTopActionsHtml = `${restoreBtnHtml}${historyBtnHtml}`;
+    } else {
+      customTopActionsHtml = renderDetailFormTopActions({
         mode,
         isStaff: true,
         formId: 'auditorDetailForm',
@@ -765,17 +858,20 @@ function renderAuditorDetailPage(props: {
         editBtnId: 'startEditAuditorBtn',
         saveTitle: isCreateMode ? 'Crear auditor' : 'Guardar cambios',
         cancelTitle: isCreateMode ? 'Cancelar creación' : 'Cancelar edición',
-        editTitle: 'Editar auditor',
+        editTitle: 'Editar Perfil',
         showHistoryBtn: !isCreateMode,
         showArchiveBtn: !isCreateMode && canArchiveRecord(profile),
         extraAuditAttrs: auditor
           ? `data-table-name="auditor" data-record-id="${escapeHtml(auditor.id)}" data-entity-name="${escapeHtml(auditor.nombre)}"`
           : '',
         extraArchiveAttrs: auditor
-          ? `data-archive-table="auditor" data-archive-id="${escapeHtml(auditor.id)}" data-archive-entity-label="Auditor Evaluador" data-archive-title="${escapeHtml(auditor.nombre)}" data-archive-subtitle="${escapeHtml(auditor.codigo_credencial || 'Evaluador Técnico')}"`
+          ? `data-archive-table="auditor" data-archive-id="${escapeHtml(auditor.id)}" data-archive-entity-label="Auditor Evaluador" data-archive-title="${escapeHtml(auditor.nombre)}" data-archive-subtitle="${escapeHtml(
+              [siglasVal, cedulaVal ? `C.I. ${cedulaVal}` : ''].filter(Boolean).join(' · ') || 'Evaluador Técnico'
+            )}"`
           : '',
-      })
-    : undefined;
+      });
+    }
+  }
 
   const feedbackHtml =
     !isReadOnly && state.editErrorMessage
@@ -789,7 +885,7 @@ function renderAuditorDetailPage(props: {
 
   const customRecordBodyHtml =
     isReadOnly && auditor
-      ? renderReadOnlyAuditorAttributes(auditor, normaLinks, sectorLinks, subsectorLinks)
+      ? renderReadOnlyAuditorAttributes(auditor)
       : renderAuditorFormBody(draft, isCreateMode);
 
   const childTabs = isCreateMode
@@ -800,6 +896,18 @@ function renderAuditorDetailPage(props: {
           label: 'Competencias',
           symbol: '🛡️',
           count: totalCompetencies,
+        },
+        {
+          id: 'contacto',
+          label: 'Contacto',
+          symbol: '📞',
+          count: contactCount,
+        },
+        {
+          id: 'evaluaciones',
+          label: 'Evaluaciones In Situ',
+          symbol: '🩺',
+          count: activeEvaluaciones.length,
         },
         {
           id: 'historial',
@@ -813,12 +921,8 @@ function renderAuditorDetailPage(props: {
     entityType: 'Auditor Calificado',
     entitySymbol: '🪪',
     title: isCreateMode ? 'Nuevo Auditor' : auditor ? auditor.nombre : 'Auditor Calificado',
-    eyebrowCode: !isCreateMode && auditor?.codigo_credencial ? auditor.codigo_credencial : undefined,
-    subtitle: isCreateMode
-      ? 'Registro maestro de evaluador técnico en public.auditor conforme a ISO/IEC 17021-1:2015.'
-      : auditor
-      ? `${normaLinks.length} norma${normaLinks.length === 1 ? '' : 's'} · ${sectorLinks.length} sector${sectorLinks.length === 1 ? '' : 'es'} IAF · ${subsectorLinks.length} sub-sector${subsectorLinks.length === 1 ? '' : 'es'}`
-      : undefined,
+    eyebrowCode: !isCreateMode && siglasVal ? siglasVal : undefined,
+    subtitle: subtitleText,
     statusBadge:
       !isCreateMode && auditor
         ? {
@@ -827,6 +931,12 @@ function renderAuditorDetailPage(props: {
             dotClass: statusVisual.dotClass,
           }
         : undefined,
+    secondaryHeaderBadge: isArchivedAuditor
+      ? {
+          label: 'Archivado',
+          badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+        }
+      : undefined,
     backButton: {
       label: 'Volver',
       nav: 'certificacion',
@@ -846,6 +956,22 @@ function renderAuditorDetailPage(props: {
     childTabAttrName: 'data-auditor-tab',
     renderChildTabContent: (tabId) => {
       if (!auditor) return '';
+      if (tabId === 'contacto') {
+        return renderContactoChildTab({
+          profile,
+          auditor,
+          state,
+          isStaff: effectiveStaffForEdit,
+          authUserEmail,
+        });
+      }
+      if (tabId === 'evaluaciones') {
+        return renderEvaluacionesChildTab({
+          auditor,
+          state,
+          isStaff: effectiveStaffForEdit,
+        });
+      }
       if (tabId === 'historial') {
         return renderHistorialChildTab(auditor.historialAuditorias, tableColumnWidths);
       }
@@ -854,62 +980,192 @@ function renderAuditorDetailPage(props: {
         normaLinks,
         sectorLinks,
         subsectorLinks,
-        isStaff,
+        isStaff: effectiveStaffForEdit,
         tableColumnWidths,
       });
     },
   });
 }
 
-function renderReadOnlyAuditorAttributes(
-  auditor: AuditorDetailEntity,
-  normaLinks: AuditorNormaLink[],
-  sectorLinks: AuditorSectorLink[],
-  subsectorLinks: AuditorSubsectorLink[]
-): string {
+function formatEvaluationSummaryValue(texto?: string | null, fecha?: string | null): string {
+  const cleanText = (texto || '').trim();
+  const cleanDate = (fecha || '').trim();
+  if (cleanText && cleanDate && !cleanText.includes(cleanDate)) {
+    return `${cleanText} (${cleanDate})`;
+  }
+  return cleanText || cleanDate || '';
+}
+
+function renderReadOnlyAuditorAttributes(auditor: AuditorDetailEntity): string {
+  const siglas = (auditor.siglas || auditor.codigo_credencial || '').trim();
+  const cedula = (auditor.cedula_identidad || '').trim();
+  const profesion = normalizeAuditorProfessionLabel(auditor.profesion || auditor.titulo_profesional);
+  const schemes = extractAuditorComplementarySchemes(auditor);
+  const sistemaSecundario = (auditor.sistema_gestion_secundario || '').trim();
+  const ultEval = auditor.sin_registro_evaluacion
+    ? 'S/R (Sin registro)'
+    : formatEvaluationSummaryValue(
+        auditor.ultima_evaluacion_in_situ_texto,
+        auditor.ultima_evaluacion_in_situ_fecha
+      ) || 'Sin registro';
+  const proxEval = auditor.sin_registro_evaluacion
+    ? 'S/R (Sin registro)'
+    : formatEvaluationSummaryValue(
+        auditor.proxima_evaluacion_in_situ_texto,
+        auditor.proxima_evaluacion_in_situ_fecha
+      ) || 'Sin fecha programada';
+  const sectorEvaluado = (auditor.sector_area_evaluado_texto || '').trim();
+  const obsEvaluacion = (auditor.observaciones_evaluacion || '').trim();
+  const obsSectores = (auditor.observacion_sectores || '').trim();
+  const obsClass = classifyAuditorObservacionSector(auditor);
+
   return `
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-      <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Completo</span>
-        <p class="text-xs font-bold text-slate-900">${escapeHtml(auditor.nombre)}</p>
+    <div class="space-y-3">
+      <!-- Bloque Identidad -->
+      <div class="space-y-1.5">
+        <h3 class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
+          Identidad
+        </h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre Completo</span>
+            <p class="text-xs font-bold text-slate-900">${escapeHtml(auditor.nombre)}</p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Siglas</span>
+            <p class="text-xs font-mono font-bold text-slate-900">
+              ${siglas ? escapeHtml(siglas) : '<span class="font-sans font-normal text-slate-400 italic">No asignadas</span>'}
+            </p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Nº Cédula de Identidad</span>
+            <p class="text-xs font-mono font-bold text-slate-900">
+              ${cedula ? escapeHtml(cedula) : '<span class="font-sans font-normal text-slate-400 italic">Sin cédula</span>'}
+            </p>
+          </div>
+          <div class="sm:col-span-2 lg:col-span-4 bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Profesión</span>
+            <p class="text-xs font-semibold text-slate-800">
+              ${profesion ? escapeHtml(profesion) : '<span class="font-normal text-slate-400 italic">No registrada</span>'}
+            </p>
+          </div>
+        </div>
       </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Normas Acreditadas</span>
-        <p class="text-xs font-bold text-slate-900 tabular-nums">
-          ${normaLinks.length} ${normaLinks.length === 1 ? 'norma calificada' : 'normas calificadas'}
-        </p>
+
+      <!-- Bloque Calificación Normativa y Sectorial -->
+      <div class="space-y-1.5">
+        <h3 class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
+          Calificación Normativa y Sectorial
+        </h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Año Actualización Normas</span>
+            <p class="text-xs font-bold text-slate-900 tabular-nums">
+              ${auditor.anio_actualizacion_normas ? escapeHtml(String(auditor.anio_actualizacion_normas)) : '<span class="font-normal text-slate-400 italic">Sin dato</span>'}
+            </p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Año Actualización Sectores</span>
+            <p class="text-xs font-bold text-slate-900 tabular-nums">
+              ${auditor.anio_actualizacion_sectores ? escapeHtml(String(auditor.anio_actualizacion_sectores)) : '<span class="font-normal text-slate-400 italic">Sin dato</span>'}
+            </p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-1">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Esquemas Complementarios</span>
+            <div class="flex flex-wrap gap-1">
+              ${
+                schemes.length > 0
+                  ? schemes
+                      .map(
+                        (s) =>
+                          `<span class="inline-flex px-2 py-0.5 rounded text-[11px] font-bold bg-teal-50 text-teal-800 border border-teal-200">${escapeHtml(s)}</span>`
+                      )
+                      .join('')
+                  : '<span class="text-xs text-slate-500">Ninguno</span>'
+              }
+            </div>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Sistema Secundario</span>
+            <p class="text-xs font-medium text-slate-800">
+              ${sistemaSecundario ? escapeHtml(sistemaSecundario) : '<span class="text-slate-400 italic">No aplica</span>'}
+            </p>
+          </div>
+        </div>
       </div>
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Sectores / Sub-Sectores IAF</span>
-        <p class="text-xs font-bold text-slate-900 tabular-nums">
-          ${sectorLinks.length} sectores · ${subsectorLinks.length} sub-sectores
-        </p>
+
+      <!-- Bloque Resumen de Evaluación In Situ -->
+      <div class="space-y-1.5">
+        <h3 class="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
+          Resumen de Evaluación In Situ
+        </h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Última Evaluación In Situ</span>
+            <p class="text-xs font-bold text-slate-900 tabular-nums">${escapeHtml(ultEval)}</p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Próxima Evaluación In Situ</span>
+            <p class="text-xs font-bold text-slate-900 tabular-nums">${escapeHtml(proxEval)}</p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Sector / Área Evaluada</span>
+            <p class="text-xs font-mono font-semibold text-slate-800">
+              ${sectorEvaluado ? escapeHtml(sectorEvaluado) : '<span class="font-sans font-normal text-slate-400 italic">Sin especificar</span>'}
+            </p>
+          </div>
+          <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
+            <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Observaciones de Evaluación</span>
+            <p class="text-xs text-slate-700">
+              ${obsEvaluacion ? escapeHtml(obsEvaluacion) : '<span class="text-slate-400 italic">Sin observaciones</span>'}
+            </p>
+          </div>
+        </div>
       </div>
+
       ${
-        auditor.codigo_credencial
+        obsSectores || obsClass.requiereExpertoTecnico
           ? `
-            <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-              <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Credencial de Registro</span>
-              <p class="text-xs font-mono font-bold text-slate-900">${escapeHtml(auditor.codigo_credencial)}</p>
+            <div
+              role="note"
+              class="rounded-xl border ${
+                obsClass.requiereExpertoTecnico
+                  ? 'border-amber-300 bg-amber-50/90 text-amber-950'
+                  : 'border-sky-200 bg-sky-50/80 text-sky-950'
+              } px-3.5 py-2.5 flex items-start gap-2.5"
+            >
+              <span class="text-base leading-none shrink-0 mt-0.5" aria-hidden="true">${
+                obsClass.requiereExpertoTecnico ? '⚠️' : 'ℹ️'
+              }</span>
+              <div class="space-y-0.5 min-w-0">
+                <p class="text-xs font-bold">
+                  ${
+                    obsClass.requiereExpertoTecnico
+                      ? `Acompañamiento Obligatorio con Experto Técnico${
+                          obsClass.sectoresCondicionados.length > 0
+                            ? ` (Sectores IAF ${obsClass.sectoresCondicionados.join(', ')})`
+                            : ''
+                        }`
+                      : 'Observación de Sectores IAF'
+                  }
+                </p>
+                <p class="text-xs leading-relaxed">
+                  ${escapeHtml(obsSectores || obsClass.textoAlerta)}
+                </p>
+              </div>
             </div>
           `
           : ''
       }
-      <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-2.5 sm:p-3 space-y-0.5">
-        <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">Auditorías Ejecutadas</span>
-        <p class="text-xs font-bold text-slate-900 tabular-nums">
-          ${auditor.historialAuditorias.length} ${auditor.historialAuditorias.length === 1 ? 'jornada registrada' : 'jornadas registradas'}
-        </p>
-      </div>
     </div>
   `;
 }
 
 function renderAuditorFormBody(draft: AuditorFormDraft, isCreateMode: boolean): string {
   return `
-    <form id="auditorDetailForm" class="space-y-3" novalidate>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+    <form id="auditorDetailForm" class="space-y-4" novalidate>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
           <label for="auditorNombreInput" class="block text-xs font-bold text-slate-700">
             Nombre Completo <span class="text-rose-600" aria-hidden="true">*</span>
           </label>
@@ -920,33 +1176,244 @@ function renderAuditorFormBody(draft: AuditorFormDraft, isCreateMode: boolean): 
             required
             maxlength="${AUDITOR_NOMBRE_MAX_LENGTH}"
             value="${escapeHtml(draft.nombre)}"
-            placeholder="Ej. Ing. Elena Mendoza"
+            placeholder="Ej. Yurima Carrillo"
             class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
           />
           <p class="text-[11px] text-slate-500">
-            Campo maestro persistido en <span class="font-mono font-semibold text-slate-700">public.auditor.nombre</span> (máx. ${AUDITOR_NOMBRE_MAX_LENGTH} caracteres).
+            Se permiten homónimos exactos siempre que difiera la cédula de identidad.
           </p>
         </div>
 
-        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1">
-          <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Matriz de Competencias ISO/IEC 17021-1
-          </span>
-          <p class="text-xs text-slate-600 leading-relaxed">
-            ${
-              isCreateMode
-                ? 'Una vez creado el auditor, utilice la pestaña Competencias para vincular Normas ISO, Sectores IAF y Sub-Sectores IAF.'
-                : 'Las competencias normativas y sectoriales se gestionan individualmente desde la pestaña Competencias.'
-            }
-          </p>
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorSiglasInput" class="block text-xs font-bold text-slate-700">
+            Siglas <span class="text-rose-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            type="text"
+            id="auditorSiglasInput"
+            name="siglas"
+            required
+            maxlength="${AUDITOR_SIGLAS_MAX_LENGTH}"
+            value="${escapeHtml(draft.siglas)}"
+            placeholder="Ej. YC"
+            class="w-full text-xs font-mono uppercase p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+          <p class="text-[11px] text-slate-500">Entre 2 y ${AUDITOR_SIGLAS_MAX_LENGTH} caracteres alfanuméricos.</p>
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorCedulaInput" class="block text-xs font-bold text-slate-700">
+            Nº Cédula de Identidad ${isCreateMode ? '<span class="text-rose-600" aria-hidden="true">*</span>' : ''}
+          </label>
+          <input
+            type="text"
+            id="auditorCedulaInput"
+            name="cedula_identidad"
+            ${isCreateMode ? 'required' : ''}
+            maxlength="${AUDITOR_CEDULA_MAX_LENGTH}"
+            value="${escapeHtml(draft.cedula_identidad)}"
+            placeholder="Ej. 12310919"
+            class="w-full text-xs font-mono p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+          <p class="text-[11px] text-slate-500">Identificador único entre auditores activos.</p>
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorProfesionInput" class="block text-xs font-bold text-slate-700">
+            Profesión
+          </label>
+          <input
+            type="text"
+            id="auditorProfesionInput"
+            name="profesion"
+            maxlength="${AUDITOR_PROFESION_MAX_LENGTH}"
+            value="${escapeHtml(draft.profesion)}"
+            placeholder="Ej. Ingeniero Industrial"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorAnioActualizacionNormasInput" class="block text-xs font-bold text-slate-700">
+            Año Actualización Normas
+          </label>
+          <input
+            type="number"
+            id="auditorAnioActualizacionNormasInput"
+            name="anio_actualizacion_normas"
+            min="${AUDITOR_YEAR_MIN}"
+            max="${AUDITOR_YEAR_MAX}"
+            value="${draft.anio_actualizacion_normas !== null ? escapeHtml(String(draft.anio_actualizacion_normas)) : ''}"
+            placeholder="Ej. 2024"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorAnioActualizacionSectoresInput" class="block text-xs font-bold text-slate-700">
+            Año Actualización Sectores
+          </label>
+          <input
+            type="number"
+            id="auditorAnioActualizacionSectoresInput"
+            name="anio_actualizacion_sectores"
+            min="${AUDITOR_YEAR_MIN}"
+            max="${AUDITOR_YEAR_MAX}"
+            value="${draft.anio_actualizacion_sectores !== null ? escapeHtml(String(draft.anio_actualizacion_sectores)) : ''}"
+            placeholder="Ej. 2024"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorEsquemasComplementariosInput" class="block text-xs font-bold text-slate-700">
+            Esquemas Complementarios
+          </label>
+          <input
+            type="text"
+            id="auditorEsquemasComplementariosInput"
+            name="esquemas_complementarios"
+            value="${escapeHtml(draft.esquemas_complementarios)}"
+            placeholder="Ej. MARCA, HACCP (dejar vacío si ninguno)"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorSistemaGestionSecundarioInput" class="block text-xs font-bold text-slate-700">
+            Sistema Secundario
+          </label>
+          <input
+            type="text"
+            id="auditorSistemaGestionSecundarioInput"
+            name="sistema_gestion_secundario"
+            value="${escapeHtml(draft.sistema_gestion_secundario)}"
+            placeholder="Ej. FSSC 22000 / Gestión Integrada"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorSectorAreaEvalInput" class="block text-xs font-bold text-slate-700">
+            Sector / Área Evaluada In Situ
+          </label>
+          <input
+            type="text"
+            id="auditorSectorAreaEvalInput"
+            name="sector_area_evaluado_texto"
+            value="${escapeHtml(draft.sector_area_evaluado_texto)}"
+            placeholder="Ej. 33 / 33.18"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorUltimaEvalFechaInput" class="block text-xs font-bold text-slate-700">
+            Última Eval. In Situ (Fecha)
+          </label>
+          <input
+            type="date"
+            id="auditorUltimaEvalFechaInput"
+            name="ultima_evaluacion_in_situ_fecha"
+            value="${escapeHtml(draft.ultima_evaluacion_in_situ_fecha || '')}"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorProximaEvalFechaInput" class="block text-xs font-bold text-slate-700">
+            Próxima Eval. In Situ (Fecha)
+          </label>
+          <input
+            type="date"
+            id="auditorProximaEvalFechaInput"
+            name="proxima_evaluacion_in_situ_fecha"
+            value="${escapeHtml(draft.proxima_evaluacion_in_situ_fecha || '')}"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorUltimaEvalTextoInput" class="block text-xs font-bold text-slate-700">
+            Última Eval. (Etiqueta)
+          </label>
+          <input
+            type="text"
+            id="auditorUltimaEvalTextoInput"
+            name="ultima_evaluacion_in_situ_texto"
+            value="${escapeHtml(draft.ultima_evaluacion_in_situ_texto)}"
+            placeholder="Ej. nov-24"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorProximaEvalTextoInput" class="block text-xs font-bold text-slate-700">
+            Próxima Eval. (Etiqueta)
+          </label>
+          <input
+            type="text"
+            id="auditorProximaEvalTextoInput"
+            name="proxima_evaluacion_in_situ_texto"
+            value="${escapeHtml(draft.proxima_evaluacion_in_situ_texto)}"
+            placeholder="Ej. nov-27"
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          />
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 flex items-center justify-between gap-2">
+          <label for="auditorSinRegistroEvalInput" class="inline-flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              id="auditorSinRegistroEvalInput"
+              name="sin_registro_evaluacion"
+              ${draft.sin_registro_evaluacion ? 'checked' : ''}
+              class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
+            />
+            <span>Sin Registro de Evaluación In Situ (S/R)</span>
+          </label>
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorObsEvalInput" class="block text-xs font-bold text-slate-700">
+            Observaciones de Evaluación
+          </label>
+          <textarea
+            id="auditorObsEvalInput"
+            name="observaciones_evaluacion"
+            rows="2"
+            placeholder="Notas de evaluación in situ, condición pendiente, etc."
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          >${escapeHtml(draft.observaciones_evaluacion)}</textarea>
+        </div>
+
+        <div class="sm:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+          <label for="auditorObsSectoresInput" class="block text-xs font-bold text-slate-700">
+            Observación de Sectores / Experto Técnico
+          </label>
+          <textarea
+            id="auditorObsSectoresInput"
+            name="observacion_sectores"
+            rows="2"
+            placeholder="Ej. Sector 9 y 38 con Experto Técnico."
+            class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:ring-2 focus:ring-slate-900/15 focus:outline-none"
+          >${escapeHtml(draft.observacion_sectores)}</textarea>
         </div>
       </div>
+
+      <p class="text-[11px] text-slate-500">
+        ${
+          isCreateMode
+            ? 'Después de guardar el perfil podrá vincular Competencias ISO/IAF, teléfonos, correos y evaluaciones in situ desde las pestañas de la ficha.'
+            : 'Las competencias M:N, canales de contacto y evaluaciones in situ se gestionan en sus pestañas dedicadas.'
+        }
+      </p>
     </form>
   `;
 }
 
 /**
- * TAB 1: Matriz de Competencias M:N (norma_auditor, sector_iaf_auditor, subsector_iaf_auditor)
+ * TAB 1: Matriz de Competencias M:N (norma_auditor, sector_iaf_auditor, subsector_iaf_auditor) + Esquemas
  */
 function renderCompetenciasChildTab(params: {
   auditor: AuditorDetailEntity;
@@ -957,12 +1424,30 @@ function renderCompetenciasChildTab(params: {
   tableColumnWidths?: Record<string, Record<string, number>>;
 }): string {
   const { auditor, normaLinks, sectorLinks, subsectorLinks, isStaff, tableColumnWidths } = params;
+  const schemes = extractAuditorComplementarySchemes(auditor);
 
   const headerBarHtml = `
     <div class="flex flex-wrap items-center justify-between gap-2 pb-2.5">
-      <p class="text-xs text-slate-500">
-        Haga clic en una fila para inspeccionar o desvincular la competencia técnica bajo ISO/IEC 17021-1.
-      </p>
+      <div class="flex flex-wrap items-center gap-2 min-w-0">
+        <p class="text-xs text-slate-500">
+          Haga clic en una fila para inspeccionar o desvincular la competencia técnica bajo ISO/IEC 17021-1.
+        </p>
+        ${
+          schemes.length > 0
+            ? `
+              <div class="inline-flex items-center gap-1 flex-wrap">
+                <span class="text-[11px] font-semibold text-slate-500">Esquemas:</span>
+                ${schemes
+                  .map(
+                    (s) =>
+                      `<span class="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">${escapeHtml(s)}</span>`
+                  )
+                  .join('')}
+              </div>
+            `
+            : ''
+        }
+      </div>
       ${
         isStaff
           ? `
@@ -1144,7 +1629,643 @@ function renderCompetenciasChildTab(params: {
 }
 
 /**
- * TAB 2: Historial de Auditorías Realizadas (public.auditoria)
+ * TAB 2: Contacto (telefono_auditor y email_auditor — paridad con expertoTecnicoView.ts)
+ */
+function renderContactoChildTab(params: {
+  profile: UserProfile;
+  auditor: AuditorDetailEntity;
+  state: AuditorViewState;
+  isStaff: boolean;
+  authUserEmail?: string | null;
+}): string {
+  const { profile, auditor, state, isStaff, authUserEmail } = params;
+  const activePhones = (auditor.telefonos || []).filter((t) => !t.deleted_at);
+  const activeEmails = (auditor.emails || []).filter((e) => !e.deleted_at);
+
+  const telDraft: AuditorTelefonoFormDraft =
+    state.telefonoDraft ?? createEmptyAuditorTelefonoDraft();
+  const emailDraft: AuditorEmailFormDraft =
+    state.emailDraft ?? createEmptyAuditorEmailDraft();
+
+  const authEmailNorm = (authUserEmail || '').trim().toLowerCase();
+
+  return `
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <!-- Panel Teléfonos -->
+      <section class="bg-slate-50/70 border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+            📞 Teléfonos (${activePhones.length})
+          </h3>
+          ${
+            isStaff && !state.isAddingTelefono
+              ? `
+                <button
+                  type="button"
+                  data-action="open-add-auditor-telefono"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold cursor-pointer transition-colors"
+                >
+                  <span aria-hidden="true">+</span>
+                  <span>Agregar Teléfono</span>
+                </button>
+              `
+              : ''
+          }
+        </div>
+
+        ${
+          isStaff && state.isAddingTelefono
+            ? `
+              <form id="auditorTelefonoForm" class="bg-white border border-indigo-200 rounded-lg p-3 space-y-2.5" novalidate>
+                ${
+                  state.telefonoErrorMessage
+                    ? `<div role="alert" class="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">⚠️ ${escapeHtml(state.telefonoErrorMessage)}</div>`
+                    : ''
+                }
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label for="audTelNumeroInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                      Número Telefónico <span class="text-rose-600">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="audTelNumeroInput"
+                      name="telefono"
+                      maxlength="${AUDITOR_TELEFONO_MAX_LENGTH}"
+                      value="${escapeHtml(telDraft.telefono)}"
+                      placeholder="Ej. +58 414 555-0101"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label for="audTelTipoSelect" class="block text-[11px] font-bold text-slate-700 mb-1">
+                      Tipo
+                    </label>
+                    <select
+                      id="audTelTipoSelect"
+                      name="tipo_telefono"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    >
+                      ${AUDITOR_TIPO_TELEFONO_OPTIONS.map(
+                        (opt) => `
+                          <option value="${escapeHtml(opt)}" ${telDraft.tipo_telefono === opt ? 'selected' : ''}>
+                            ${escapeHtml(opt)}
+                          </option>
+                        `
+                      ).join('')}
+                    </select>
+                  </div>
+                </div>
+                <label for="audTelPrincipalInput" class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="audTelPrincipalInput"
+                    name="es_principal"
+                    ${telDraft.es_principal ? 'checked' : ''}
+                    class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
+                  />
+                  <span>Marcar como teléfono principal</span>
+                </label>
+                <div class="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    data-action="cancel-add-auditor-telefono"
+                    class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    id="saveAuditorTelefonoBtn"
+                    class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Guardar Teléfono
+                  </button>
+                </div>
+              </form>
+            `
+            : ''
+        }
+
+        ${
+          activePhones.length === 0
+            ? `<p class="text-xs text-slate-500 italic py-3">Sin teléfonos registrados para este auditor.</p>`
+            : `
+              <div class="space-y-2">
+                ${activePhones
+                  .map(
+                    (tel) => `
+                      <div class="bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="text-xs font-bold text-slate-900 font-mono truncate">${escapeHtml(tel.telefono)}</span>
+                            ${
+                              tel.es_principal
+                                ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">Principal</span>`
+                                : ''
+                            }
+                          </div>
+                          <div class="text-[11px] text-slate-500">${escapeHtml(tel.tipo_telefono)}</div>
+                        </div>
+                        ${
+                          isStaff
+                            ? `
+                              <div class="flex items-center gap-1.5 shrink-0">
+                                ${
+                                  !tel.es_principal
+                                    ? `
+                                      <button
+                                        type="button"
+                                        data-action="set-primary-auditor-telefono"
+                                        data-telefono-id="${escapeHtml(tel.id)}"
+                                        aria-label="Marcar principal ${escapeHtml(tel.telefono)}"
+                                        class="px-2 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold cursor-pointer transition-colors"
+                                      >
+                                        Principal
+                                      </button>
+                                    `
+                                    : ''
+                                }
+                                <button
+                                  type="button"
+                                  data-action="archive-auditor-telefono"
+                                  data-telefono-id="${escapeHtml(tel.id)}"
+                                  aria-label="Archivar teléfono ${escapeHtml(tel.telefono)}"
+                                  class="px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold cursor-pointer transition-colors"
+                                >
+                                  Archivar
+                                </button>
+                              </div>
+                            `
+                            : ''
+                        }
+                      </div>
+                    `
+                  )
+                  .join('')}
+              </div>
+            `
+        }
+      </section>
+
+      <!-- Panel Correos Electrónicos -->
+      <section class="bg-slate-50/70 border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+            ✉️ Correos Electrónicos (${activeEmails.length})
+          </h3>
+          ${
+            isStaff && !state.isAddingEmail
+              ? `
+                <button
+                  type="button"
+                  data-action="open-add-auditor-email"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold cursor-pointer transition-colors"
+                >
+                  <span aria-hidden="true">+</span>
+                  <span>Agregar Email</span>
+                </button>
+              `
+              : ''
+          }
+        </div>
+
+        ${
+          isStaff && state.isAddingEmail
+            ? `
+              <form id="auditorEmailForm" class="bg-white border border-indigo-200 rounded-lg p-3 space-y-2.5" novalidate>
+                ${
+                  state.emailErrorMessage
+                    ? `<div role="alert" class="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">⚠️ ${escapeHtml(state.emailErrorMessage)}</div>`
+                    : ''
+                }
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label for="audEmailInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                      Correo Electrónico <span class="text-rose-600">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      id="audEmailInput"
+                      name="email"
+                      maxlength="${AUDITOR_EMAIL_MAX_LENGTH}"
+                      value="${escapeHtml(emailDraft.email)}"
+                      placeholder="Ej. auditor@fondonorma.org"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label for="audEmailTipoSelect" class="block text-[11px] font-bold text-slate-700 mb-1">
+                      Tipo
+                    </label>
+                    <select
+                      id="audEmailTipoSelect"
+                      name="tipo_email"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    >
+                      ${AUDITOR_TIPO_EMAIL_OPTIONS.map(
+                        (opt) => `
+                          <option value="${escapeHtml(opt)}" ${emailDraft.tipo_email === opt ? 'selected' : ''}>
+                            ${escapeHtml(opt)}
+                          </option>
+                        `
+                      ).join('')}
+                    </select>
+                  </div>
+                </div>
+                <label for="audEmailPrincipalInput" class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="audEmailPrincipalInput"
+                    name="es_principal"
+                    ${emailDraft.es_principal ? 'checked' : ''}
+                    class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
+                  />
+                  <span>Marcar como correo principal</span>
+                </label>
+                <div class="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    data-action="cancel-add-auditor-email"
+                    class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    id="saveAuditorEmailBtn"
+                    class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Guardar Email
+                  </button>
+                </div>
+              </form>
+            `
+            : ''
+        }
+
+        ${
+          activeEmails.length === 0
+            ? `<p class="text-xs text-slate-500 italic py-3">Sin correos electrónicos registrados para este auditor.</p>`
+            : `
+              <div class="space-y-2">
+                ${activeEmails
+                  .map((em) => {
+                    const isAuthMatched =
+                      (Boolean(authEmailNorm) &&
+                        em.email.trim().toLowerCase() === authEmailNorm) ||
+                      (auditor.id === profile.id && Boolean(em.es_principal));
+                    return `
+                      <div class="bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(em.email)}</span>
+                            ${
+                              em.es_principal
+                                ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">Principal</span>`
+                                : ''
+                            }
+                          </div>
+                          <div class="text-[11px] text-slate-500">
+                            ${escapeHtml(em.tipo_email)}${
+                              isAuthMatched
+                                ? ' · Correo vinculado al acceso Auth'
+                                : em.es_principal
+                                ? ' · Correo de notificación y referencia de acceso'
+                                : ''
+                            }
+                          </div>
+                        </div>
+                        ${
+                          isStaff
+                            ? `
+                              <div class="flex items-center gap-1.5 shrink-0">
+                                ${
+                                  !em.es_principal
+                                    ? `
+                                      <button
+                                        type="button"
+                                        data-action="set-primary-auditor-email"
+                                        data-email-id="${escapeHtml(em.id)}"
+                                        aria-label="Marcar principal ${escapeHtml(em.email)}"
+                                        class="px-2 py-1 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold cursor-pointer transition-colors"
+                                      >
+                                        Principal
+                                      </button>
+                                    `
+                                    : ''
+                                }
+                                <button
+                                  type="button"
+                                  data-action="archive-auditor-email"
+                                  data-email-id="${escapeHtml(em.id)}"
+                                  aria-label="Archivar correo ${escapeHtml(em.email)}"
+                                  class="px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold cursor-pointer transition-colors"
+                                >
+                                  Archivar
+                                </button>
+                              </div>
+                            `
+                            : ''
+                        }
+                      </div>
+                    `;
+                  })
+                  .join('')}
+              </div>
+            `
+        }
+      </section>
+    </div>
+  `;
+}
+
+/**
+ * TAB 3: Evaluaciones In Situ (evaluacion_in_situ_auditor)
+ */
+function renderEvaluacionesChildTab(params: {
+  auditor: AuditorDetailEntity;
+  state: AuditorViewState;
+  isStaff: boolean;
+}): string {
+  const { auditor, state, isStaff } = params;
+  const evaluaciones = sortEvaluacionesInSituChronological(auditor.evaluaciones_in_situ);
+  const status = evaluateAuditorInSituStatus(auditor);
+  const statusVisual = getAuditorInSituStatusVisual(status);
+  const evalDraft: EvaluacionInSituFormDraft =
+    state.evaluacionDraft ?? createEmptyEvaluacionInSituDraft();
+
+  return `
+    <div class="space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 pb-1">
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${statusVisual.badgeClass}">
+            <span class="w-1.5 h-1.5 rounded-full ${statusVisual.dotClass}"></span>
+            <span>Estado vigente: ${escapeHtml(statusVisual.label)}</span>
+          </span>
+          <p class="text-xs text-slate-500">
+            Historial cronológico de evaluaciones in situ registradas para este auditor.
+          </p>
+        </div>
+        ${
+          isStaff
+            ? `
+              <div class="flex flex-wrap items-center gap-2 shrink-0">
+                ${
+                  !auditor.sin_registro_evaluacion
+                    ? `
+                      <button
+                        type="button"
+                        data-action="toggle-auditor-sin-registro"
+                        data-auditor-id="${escapeHtml(auditor.id)}"
+                        class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+                      >
+                        <span>Marcar como S/R</span>
+                      </button>
+                    `
+                    : ''
+                }
+                ${
+                  !state.isAddingEvaluacion
+                    ? `
+                      <button
+                        type="button"
+                        data-action="open-add-auditor-evaluacion"
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                      >
+                        <span aria-hidden="true">+</span>
+                        <span>Registrar Evaluación</span>
+                      </button>
+                    `
+                    : ''
+                }
+              </div>
+            `
+            : ''
+        }
+      </div>
+
+      ${
+        isStaff && state.isAddingEvaluacion
+          ? `
+            <form id="auditorEvaluacionForm" class="bg-slate-50 border border-indigo-200 rounded-xl p-4 space-y-3" novalidate>
+              <div class="flex items-center justify-between gap-2">
+                <h4 class="text-xs font-bold text-slate-900">Nueva Evaluación In Situ</h4>
+                <button
+                  type="button"
+                  data-action="cancel-add-auditor-evaluacion"
+                  class="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+              ${
+                state.evaluacionErrorMessage
+                  ? `<div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">⚠️ ${escapeHtml(state.evaluacionErrorMessage)}</div>`
+                  : ''
+              }
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                <div>
+                  <label for="audEvalPeriodoInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Período / Etiqueta
+                  </label>
+                  <input
+                    type="text"
+                    id="audEvalPeriodoInput"
+                    name="etiqueta_periodo"
+                    value="${escapeHtml(evalDraft.etiqueta_periodo)}"
+                    placeholder="Ej. Evaluación 2 (nov-24)"
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label for="audEvalNormaInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Norma de Referencia
+                  </label>
+                  <input
+                    type="text"
+                    id="audEvalNormaInput"
+                    name="norma_referencia"
+                    value="${escapeHtml(evalDraft.norma_referencia)}"
+                    placeholder="Ej. ISO 9001:2015"
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label for="audEvalSectorInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Sector / Área Evaluada
+                  </label>
+                  <input
+                    type="text"
+                    id="audEvalSectorInput"
+                    name="sector_area_evaluado"
+                    value="${escapeHtml(evalDraft.sector_area_evaluado)}"
+                    placeholder="Ej. Sector 17 / 17.1"
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label for="audEvalUltFechaInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Última Evaluación (Fecha)
+                  </label>
+                  <input
+                    type="date"
+                    id="audEvalUltFechaInput"
+                    name="ultima_evaluacion_fecha"
+                    value="${escapeHtml(evalDraft.ultima_evaluacion_fecha || '')}"
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label for="audEvalProxFechaInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Próxima Evaluación (Fecha)
+                  </label>
+                  <input
+                    type="date"
+                    id="audEvalProxFechaInput"
+                    name="proxima_evaluacion_fecha"
+                    value="${escapeHtml(evalDraft.proxima_evaluacion_fecha || '')}"
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label for="audEvalUltTextoInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Texto Última / Próxima (Opcional)
+                  </label>
+                  <div class="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="text"
+                      id="audEvalUltTextoInput"
+                      name="ultima_evaluacion_texto"
+                      value="${escapeHtml(evalDraft.ultima_evaluacion_texto)}"
+                      placeholder="nov-24"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      id="audEvalProxTextoInput"
+                      name="proxima_evaluacion_texto"
+                      value="${escapeHtml(evalDraft.proxima_evaluacion_texto)}"
+                      placeholder="nov-27"
+                      class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div class="sm:col-span-2 lg:col-span-3">
+                  <label for="audEvalObsInput" class="block text-[11px] font-bold text-slate-700 mb-1">
+                    Observaciones
+                  </label>
+                  <textarea
+                    id="audEvalObsInput"
+                    name="observaciones"
+                    rows="2"
+                    placeholder="Comentarios de desempeño en campo, testigos o recomendaciones..."
+                    class="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:border-slate-900 focus:outline-none"
+                  >${escapeHtml(evalDraft.observaciones)}</textarea>
+                </div>
+              </div>
+              <div class="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  data-action="cancel-add-auditor-evaluacion"
+                  class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  id="saveAuditorEvaluacionBtn"
+                  class="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                >
+                  Guardar Evaluación
+                </button>
+              </div>
+            </form>
+          `
+          : ''
+      }
+
+      ${
+        evaluaciones.length === 0
+          ? `
+            <div class="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <span class="text-2xl block" aria-hidden="true">🩺</span>
+              <p class="font-bold text-slate-800">Sin evaluaciones in situ registradas</p>
+              <p class="text-slate-500">
+                ${
+                  isStaff
+                    ? 'Utilice "+ Registrar Evaluación" para documentar evaluaciones de testigo en campo y actualizar la vigencia del auditor.'
+                    : 'Este auditor no registra evaluaciones in situ activas.'
+                }
+              </p>
+            </div>
+          `
+          : `
+            <div class="space-y-2.5">
+              ${evaluaciones
+                .map((ev: EvaluacionInSituAuditorEntity) => {
+                  const ultDisplay =
+                    formatEvaluationSummaryValue(ev.ultima_evaluacion_texto, ev.ultima_evaluacion_fecha) ||
+                    'Sin fecha';
+                  const proxDisplay =
+                    formatEvaluationSummaryValue(ev.proxima_evaluacion_texto, ev.proxima_evaluacion_fecha) ||
+                    'Sin programar';
+                  return `
+                    <article class="bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                      <div class="space-y-1.5 min-w-0 flex-1">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <h4 class="text-xs font-bold text-slate-900">
+                            ${escapeHtml(ev.etiqueta_periodo || 'Evaluación In Situ')}
+                          </h4>
+                          ${
+                            ev.norma_referencia
+                              ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">${escapeHtml(ev.norma_referencia)}</span>`
+                              : ''
+                          }
+                          ${
+                            ev.sector_area_evaluado
+                              ? `<span class="px-2 py-0.5 rounded font-mono text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">Sector ${escapeHtml(ev.sector_area_evaluado)}</span>`
+                              : ''
+                          }
+                        </div>
+                        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                          <span><strong>Última:</strong> <span class="font-mono">${escapeHtml(ultDisplay)}</span></span>
+                          <span><strong>Próxima:</strong> <span class="font-mono">${escapeHtml(proxDisplay)}</span></span>
+                        </div>
+                        ${
+                          ev.observaciones
+                            ? `<p class="text-xs text-slate-600 leading-relaxed">${escapeHtml(ev.observaciones)}</p>`
+                            : ''
+                        }
+                      </div>
+                      ${
+                        isStaff
+                          ? `
+                            <button
+                              type="button"
+                              data-action="archive-auditor-evaluacion"
+                              data-evaluacion-id="${escapeHtml(ev.id)}"
+                              aria-label="Archivar evaluación ${escapeHtml(ev.etiqueta_periodo || ultDisplay)}"
+                              class="px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold cursor-pointer shrink-0 transition-colors self-start"
+                            >
+                              Archivar
+                            </button>
+                          `
+                          : ''
+                      }
+                    </article>
+                  `;
+                })
+                .join('')}
+            </div>
+          `
+      }
+    </div>
+  `;
+}
+
+/**
+ * TAB 4: Historial de Auditorías Realizadas (public.auditoria)
  */
 function renderHistorialChildTab(
   historial: AuditoriaRealizadaEntity[],
@@ -1195,7 +2316,7 @@ function renderHistorialChildTab(
     {
       id: 'numero_certificado',
       header: 'Certificado',
-      defaultWidthPct: 18,
+      defaultWidthPct: 16,
       minWidthPx: 110,
       renderCell: (aud) =>
         `<span class="font-mono font-semibold text-slate-700">${escapeHtml(aud.numero_certificado)}</span>`,
@@ -1203,7 +2324,7 @@ function renderHistorialChildTab(
     {
       id: 'modalidad',
       header: 'Modalidad',
-      defaultWidthPct: 16,
+      defaultWidthPct: 15,
       minWidthPx: 110,
       renderCell: (aud) =>
         `<span class="text-slate-700">${escapeHtml(aud.tipo_auditoria)} · ${escapeHtml(aud.metodologia)}</span>`,
@@ -1211,17 +2332,25 @@ function renderHistorialChildTab(
     {
       id: 'rol_en_auditoria',
       header: 'Rol',
-      defaultWidthPct: 12,
-      minWidthPx: 95,
+      defaultWidthPct: 11,
+      minWidthPx: 90,
       renderCell: (aud) =>
         `<span class="font-medium text-indigo-700">${escapeHtml(aud.rol_en_auditoria)}</span>`,
+    },
+    {
+      id: 'fecha_ejecucion',
+      header: 'Fecha',
+      defaultWidthPct: 8,
+      minWidthPx: 85,
+      renderCell: (aud) =>
+        `<span class="font-mono text-[11px] text-slate-600 tabular-nums">${escapeHtml(aud.fecha_ejecucion || '—')}</span>`,
     },
     {
       id: 'estatus',
       header: 'Estatus',
       align: 'center',
-      defaultWidthPct: 12,
-      minWidthPx: 90,
+      defaultWidthPct: 8,
+      minWidthPx: 85,
       renderCell: (aud) => {
         const isCompleted = aud.estatus === 'Completada' || aud.estatus === 'Cerrada';
         return `
@@ -1243,6 +2372,6 @@ function renderHistorialChildTab(
     items: historial,
     columnWidths: tableColumnWidths?.['auditor-tab-historial'],
     getRowAttrs: (aud) =>
-      `data-action="select-prog-audit-by-code" data-audit-code="${escapeHtml(aud.codigo_auditoria)}" title="Abrir auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
+      `data-action="select-prog-audit-by-code" data-audit-id="${escapeHtml(aud.id)}" data-audit-code="${escapeHtml(aud.codigo_auditoria)}" title="Abrir auditoría ${escapeHtml(aud.codigo_auditoria)}"`,
   });
 }

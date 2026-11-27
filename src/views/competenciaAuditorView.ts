@@ -3,6 +3,7 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   createEmptyCompetenciaFormDraft,
+  formatAuditorSelectorLabel,
   getAuditorNormaLinks,
   getAuditorSectorLinks,
   getAuditorSubsectorLinks,
@@ -144,7 +145,7 @@ export function renderCompetenciaAuditorView(props: CompetenciaAuditorViewProps)
           required: true,
           options: sortedAuditors.map((aud) => ({
             value: aud.id,
-            label: aud.nombre,
+            label: formatAuditorSelectorLabel(aud),
           })),
         })}
       </div>
@@ -353,7 +354,7 @@ export function renderCompetenciaAuditorView(props: CompetenciaAuditorViewProps)
   const parents: DetailParentChip[] = [
     {
       label: 'Auditor',
-      value: auditor.nombre,
+      value: formatAuditorSelectorLabel(auditor),
       symbol: '🪪',
       navAction: {
         nav: 'certificacion',

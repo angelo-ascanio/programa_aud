@@ -254,7 +254,7 @@ export interface AuditorDetailEntity {
   deleted_at?: string | null;
 }
 
-export type AuditorChildTab = 'competencias' | 'historial';
+export type AuditorChildTab = 'competencias' | 'contacto' | 'evaluaciones' | 'historial';
 
 export type AuditorSortColumn =
   | 'nombre'
@@ -284,6 +284,15 @@ export interface AuditorViewState {
   facetSelections?: MultiViewSelectionMap;
   isCreating?: boolean;
   createErrorMessage?: string | null;
+  isAddingTelefono?: boolean;
+  telefonoDraft?: AuditorTelefonoFormDraft;
+  telefonoErrorMessage?: string | null;
+  isAddingEmail?: boolean;
+  emailDraft?: AuditorEmailFormDraft;
+  emailErrorMessage?: string | null;
+  isAddingEvaluacion?: boolean;
+  evaluacionDraft?: EvaluacionInSituFormDraft;
+  evaluacionErrorMessage?: string | null;
 }
 
 export interface AuditorFilterCriteria {
@@ -1405,6 +1414,37 @@ export function summarizeEvaluacionesInSitu(
     proxima_evaluacion_in_situ_fecha: maxProxima,
     sin_registro_evaluacion: maxUltima === null,
   };
+}
+
+export function sortEvaluacionesInSituChronological(
+  evaluaciones: ReadonlyArray<EvaluacionInSituAuditorEntity> | undefined | null
+): EvaluacionInSituAuditorEntity[] {
+  if (!Array.isArray(evaluaciones)) return [];
+  return evaluaciones
+    .filter((ev) => !ev.deleted_at)
+    .slice()
+    .sort((a, b) => {
+      const dateA = (a.ultima_evaluacion_fecha || a.proxima_evaluacion_fecha || '').trim();
+      const dateB = (b.ultima_evaluacion_fecha || b.proxima_evaluacion_fecha || '').trim();
+      if (dateA && dateB && dateA !== dateB) {
+        return dateB.localeCompare(dateA);
+      }
+      if (dateA && !dateB) return -1;
+      if (!dateA && dateB) return 1;
+      return (b.etiqueta_periodo || '').localeCompare(a.etiqueta_periodo || '', 'es');
+    });
+}
+
+export function formatAuditorSelectorLabel(
+  auditor: Pick<AuditorDetailEntity, 'nombre'> &
+    Partial<Pick<AuditorDetailEntity, 'siglas' | 'codigo_credencial' | 'cedula_identidad'>>
+): string {
+  const siglas = (auditor.siglas || auditor.codigo_credencial || '').trim();
+  const cedula = (auditor.cedula_identidad || '').trim();
+  const metaParts: string[] = [];
+  if (siglas) metaParts.push(siglas);
+  if (cedula) metaParts.push(`C.I. ${cedula}`);
+  return metaParts.length > 0 ? `${auditor.nombre} (${metaParts.join(' · ')})` : auditor.nombre;
 }
 
 export function evaluateAuditorInSituStatus(

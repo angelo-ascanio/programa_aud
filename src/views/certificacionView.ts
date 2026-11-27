@@ -210,6 +210,7 @@ export interface CertificacionViewState {
   archivedEmailIds?: ReadonlySet<string>;
   archiveConfig?: ArchiveMultiViewConfig;
   tableColumnWidths?: Record<string, Record<string, number>>;
+  authUserEmail?: string | null;
 }
 
 export function renderCertificacionView(
@@ -425,6 +426,7 @@ export function renderCertificacionView(
       });
     } else {
       const audState: AuditorViewState = {
+        ...state.auditorState,
         selectedAuditorId: state.auditorState?.selectedAuditorId || null,
         activeChildTab: state.auditorState?.activeChildTab || 'competencias',
         query: state.auditorState?.query || '',
@@ -455,6 +457,7 @@ export function renderCertificacionView(
         archiveConfig: state.archiveConfig,
         columnWidths: state.tableColumnWidths?.['cert-auditores-main'],
         tableColumnWidths: state.tableColumnWidths,
+        authUserEmail: state.authUserEmail,
       });
     }
   } else if (activeSub === 'experts') {

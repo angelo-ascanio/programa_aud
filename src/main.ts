@@ -790,26 +790,46 @@ import {
   addCompetenciaLinkToAuditor,
   applyCompetenciaSectorCascade,
   createAuditorDraftFromEntity,
+  createEmptyAuditorEmailDraft,
   createEmptyAuditorFormDraft,
+  createEmptyAuditorTelefonoDraft,
   createEmptyCompetenciaFormDraft,
+  createEmptyEvaluacionInSituDraft,
   getCredentialValidityState,
+  getPrimaryAuditorEmail,
+  getPrimaryAuditorTelefono,
   removeCompetenciaLinkFromAuditor,
+  summarizeEvaluacionesInSitu,
   validateAuditorDraft,
+  validateAuditorEmailDraft,
+  validateAuditorTelefonoDraft,
   validateCompetenciaDraft,
+  validateEvaluacionInSituDraft,
   type AuditorDetailEntity,
+  type AuditorEmailFormDraft,
   type AuditorFormDraft,
   type AuditorNormaLink,
   type AuditorSectorLink,
   type AuditorSubsectorLink,
   type AuditorSortColumn,
+  type AuditorTelefonoFormDraft,
   type AuditorViewState,
   type AuditorChildTab,
   type CompetenciaAuditorFormDraft,
   type CompetenciaTipo,
+  type EvaluacionInSituFormDraft,
 } from './lib/competencyMatrix';
 import {
+  addEmailAuditor,
+  addEvaluacionInSituAuditor,
+  addTelefonoAuditor,
+  deleteEmailAuditor,
+  deleteEvaluacionInSituAuditor,
+  deleteTelefonoAuditor,
   hydrateAuditoresFromSupabase,
   saveAuditorProfile,
+  setPrimaryEmailAuditor,
+  setPrimaryTelefonoAuditor,
   type AuditorSupabaseClient,
 } from './lib/auditorPersistence';
 import {
@@ -1925,6 +1945,15 @@ const state: AppState = {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isAddingTelefono: false,
+    telefonoDraft: undefined,
+    telefonoErrorMessage: null,
+    isAddingEmail: false,
+    emailDraft: undefined,
+    emailErrorMessage: null,
+    isAddingEvaluacion: false,
+    evaluacionDraft: undefined,
+    evaluacionErrorMessage: null,
   },
   competenciaAuditorDomain: {
     isOpen: false,
@@ -2508,6 +2537,7 @@ function render(): void {
       certificadoState: state.certificadoDomain,
       allCertificadosDetailed: scopedDetailedCerts,
       auditorState: state.auditorDomain,
+      authUserEmail: state.user?.email || null,
       competenciaAuditorState: state.competenciaAuditorDomain,
       allAuditorsDetailed: state.domainData.allAuditorsDetailed,
       expertoTecnicoState: state.expertoTecnicoDomain,
@@ -3655,6 +3685,15 @@ function clearAllEntitySelections(): void {
   state.auditorDomain.editErrorMessage = null;
   state.auditorDomain.isCreating = false;
   state.auditorDomain.createErrorMessage = null;
+  state.auditorDomain.isAddingTelefono = false;
+  state.auditorDomain.telefonoDraft = undefined;
+  state.auditorDomain.telefonoErrorMessage = null;
+  state.auditorDomain.isAddingEmail = false;
+  state.auditorDomain.emailDraft = undefined;
+  state.auditorDomain.emailErrorMessage = null;
+  state.auditorDomain.isAddingEvaluacion = false;
+  state.auditorDomain.evaluacionDraft = undefined;
+  state.auditorDomain.evaluacionErrorMessage = null;
 
   state.competenciaAuditorDomain.isOpen = false;
   state.competenciaAuditorDomain.mode = 'read';
@@ -4160,7 +4199,10 @@ function applyBreadcrumbSegmentState(targetSeg: BreadcrumbSegment): void {
   } else if (entityType === 'auditor') {
     if (entityId) {
       state.auditorDomain.selectedAuditorId = entityId;
-      state.auditorDomain.activeChildTab = tab === 'historial' ? 'historial' : 'competencias';
+      state.auditorDomain.activeChildTab =
+        tab === 'contacto' || tab === 'evaluaciones' || tab === 'historial'
+          ? tab
+          : 'competencias';
     } else if (targetSeg.id === 'auditor-new' && isApprovedStaff()) {
       state.auditorDomain.isCreating = true;
       state.auditorDomain.formDraft = createEmptyAuditorFormDraft();
@@ -6967,7 +7009,11 @@ function bindAuthenticatedEvents(): void {
         const aud =
           state.domainData.allAuditorsDetailed.find((a) => a.id === entityId) ||
           INITIAL_AUDITORES_DETAILED.find((a) => a.id === entityId);
-        const requestedTab = btn.dataset.targetTab === 'historial' ? 'historial' : 'competencias';
+        const rawTab = btn.dataset.targetTab;
+        const requestedTab: AuditorChildTab =
+          rawTab === 'contacto' || rawTab === 'evaluaciones' || rawTab === 'historial'
+            ? rawTab
+            : 'competencias';
         clearAllEntitySelections();
         state.activeRoute = 'certificacion';
         state.activeSubSection = 'auditors';
@@ -23921,12 +23967,23 @@ function bindAuthenticatedEvents(): void {
     });
   });
 
-  // 4. Child tab switching (Competencias | Historial de Auditorías)
+  // 4. Child tab switching (Competencias | Contacto | Evaluaciones In Situ | Historial de Auditorías)
   document.querySelectorAll<HTMLElement>('[data-auditor-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.auditorTab as AuditorChildTab | undefined;
-      if (tab === 'competencias' || tab === 'historial') {
+      if (
+        tab === 'competencias' ||
+        tab === 'contacto' ||
+        tab === 'evaluaciones' ||
+        tab === 'historial'
+      ) {
         state.auditorDomain.activeChildTab = tab;
+        state.auditorDomain.isAddingTelefono = false;
+        state.auditorDomain.telefonoErrorMessage = null;
+        state.auditorDomain.isAddingEmail = false;
+        state.auditorDomain.emailErrorMessage = null;
+        state.auditorDomain.isAddingEvaluacion = false;
+        state.auditorDomain.evaluacionErrorMessage = null;
         syncCurrentBreadcrumbTab(tab);
         render();
       }
@@ -24036,12 +24093,16 @@ function bindAuthenticatedEvents(): void {
     return next;
   };
 
-  document.getElementById('auditorNombreInput')?.addEventListener('input', () => {
+  const auditorDetailFormEl = document.getElementById('auditorDetailForm');
+  auditorDetailFormEl?.addEventListener('input', () => {
+    syncAuditorDraftFromDom();
+  });
+  auditorDetailFormEl?.addEventListener('change', () => {
     syncAuditorDraftFromDom();
   });
 
   // 6. Save Auditor Detail Form ('add' or 'edit') -> public.auditor
-  document.getElementById('auditorDetailForm')?.addEventListener('submit', (e) => {
+  auditorDetailFormEl?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
 
@@ -24065,199 +24126,856 @@ function bindAuthenticatedEvents(): void {
 
     const norm = validation.normalized;
 
-    if (isCreateMode) {
-      const newId = crypto.randomUUID();
-      const newAuditor: AuditorDetailEntity = {
-        id: newId,
-        nombre: norm.nombre,
-        siglas: norm.siglas,
-        cedula_identidad: norm.cedula_identidad,
-        profesion: norm.profesion,
-        esquemas_complementarios: norm.esquemas_complementarios,
-        anio_actualizacion_normas: norm.anio_actualizacion_normas,
-        sistema_gestion_secundario: norm.sistema_gestion_secundario,
-        ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
-        proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
-        ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
-        proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
-        sin_registro_evaluacion: norm.sin_registro_evaluacion,
-        sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
-        observaciones_evaluacion: norm.observaciones_evaluacion,
-        anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
-        observacion_sectores: norm.observacion_sectores,
-        telefonos: [],
-        emails: [],
-        evaluaciones_in_situ: [],
-        titulo_profesional: norm.profesion || 'Auditor Técnico Evaluador',
-        codigo_credencial: norm.siglas,
-        email: '',
-        telefono: '',
-        biografia: norm.observaciones_evaluacion || norm.observacion_sectores || '',
-        instituto_registro: 'FONDONORMA',
-        categoria_profesional: 'Auditor Calificado',
-        calificacion: 'Calificado',
-        normas_acreditadas: [],
-        sectores_iaf: [],
-        competencias: [],
-        normaLinks: [],
-        sectorLinks: [],
-        subsectorLinks: [],
-        historialAuditorias: [],
-      };
+    void (async () => {
+      if (isCreateMode) {
+        const newId = crypto.randomUUID();
+        const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+          profile: state.profile,
+          draft: norm,
+          existingAuditors: existingSnapshot,
+          newId,
+        });
+        if (!saveRes.ok) {
+          state.auditorDomain.editErrorMessage =
+            saveRes.error || 'No se pudo crear el auditor en base de datos.';
+          render();
+          return;
+        }
 
-      state.domainData.allAuditorsDetailed = [
-        newAuditor,
-        ...state.domainData.allAuditorsDetailed,
-      ];
-      state.domainData.auditors = [
-        {
+        const newAuditor: AuditorDetailEntity = {
           id: newId,
           nombre: norm.nombre,
-          rol: newAuditor.categoria_profesional,
-          normas: [],
+          siglas: norm.siglas,
+          cedula_identidad: norm.cedula_identidad,
+          profesion: norm.profesion,
+          esquemas_complementarios: norm.esquemas_complementarios,
+          anio_actualizacion_normas: norm.anio_actualizacion_normas,
+          sistema_gestion_secundario: norm.sistema_gestion_secundario,
+          ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
+          proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
+          ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
+          proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
+          sin_registro_evaluacion: norm.sin_registro_evaluacion,
+          sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
+          observaciones_evaluacion: norm.observaciones_evaluacion,
+          anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
+          observacion_sectores: norm.observacion_sectores,
+          telefonos: [],
+          emails: [],
+          evaluaciones_in_situ: [],
+          titulo_profesional: norm.profesion || 'Auditor Técnico Evaluador',
+          codigo_credencial: norm.siglas,
+          email: '',
+          telefono: '',
+          biografia: norm.observaciones_evaluacion || norm.observacion_sectores || '',
+          instituto_registro: 'FONDONORMA',
+          categoria_profesional: 'Auditor Calificado',
+          calificacion: 'Calificado',
+          normas_acreditadas: [],
           sectores_iaf: [],
-        },
-        ...state.domainData.auditors,
-      ];
+          competencias: [],
+          normaLinks: [],
+          sectorLinks: [],
+          subsectorLinks: [],
+          historialAuditorias: [],
+        };
 
-      state.auditorDomain.selectedAuditorId = newId;
-      state.auditorDomain.isCreating = false;
+        state.domainData.allAuditorsDetailed = [
+          newAuditor,
+          ...state.domainData.allAuditorsDetailed,
+        ];
+        state.domainData.auditors = [
+          {
+            id: newId,
+            nombre: norm.nombre,
+            rol: newAuditor.categoria_profesional,
+            normas: [],
+            sectores_iaf: [],
+          },
+          ...state.domainData.auditors,
+        ];
+
+        state.auditorDomain.selectedAuditorId = newId;
+        state.auditorDomain.isCreating = false;
+        state.auditorDomain.isEditingAttributes = false;
+        state.auditorDomain.formDraft = undefined;
+        state.auditorDomain.editErrorMessage = null;
+        state.auditorDomain.activeChildTab = 'competencias';
+
+        const newAudSeg: BreadcrumbSegment = {
+          id: `aud-${newId}`,
+          label: norm.nombre,
+          route: 'certificacion',
+          subview: 'auditors',
+          entityType: 'auditor',
+          entityId: newId,
+          tab: 'competencias',
+          tooltip: `Auditor > ${norm.nombre}`,
+        };
+        if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'auditor-new') {
+          state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newAudSeg];
+        } else {
+          state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, newAudSeg);
+        }
+
+        recordPhase5SessionLog('auditor', newId, 'INSERT', null, {
+          nombre: norm.nombre,
+          siglas: norm.siglas,
+          cedula_identidad: norm.cedula_identidad,
+        });
+
+        showFloatingToast(`Auditor "${norm.nombre}" creado correctamente.`, 'success');
+        render();
+        return;
+      }
+
+      if (!audId) return;
+      const prevAud = existingSnapshot.find((a) => a.id === audId);
+
+      if (STRICT_UUID_PATTERN.test(audId)) {
+        const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+          profile: state.profile,
+          auditorId: audId,
+          draft: norm,
+          existingAuditors: existingSnapshot,
+        });
+        if (!saveRes.ok) {
+          state.auditorDomain.editErrorMessage =
+            saveRes.error || 'No se pudo actualizar el auditor en base de datos.';
+          render();
+          return;
+        }
+      }
+
+      state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+        a.id === audId
+          ? {
+              ...a,
+              nombre: norm.nombre,
+              siglas: norm.siglas,
+              cedula_identidad: norm.cedula_identidad,
+              profesion: norm.profesion,
+              esquemas_complementarios: norm.esquemas_complementarios,
+              anio_actualizacion_normas: norm.anio_actualizacion_normas,
+              sistema_gestion_secundario: norm.sistema_gestion_secundario,
+              ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
+              proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
+              ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
+              proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
+              sin_registro_evaluacion: norm.sin_registro_evaluacion,
+              sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
+              observaciones_evaluacion: norm.observaciones_evaluacion,
+              anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
+              observacion_sectores: norm.observacion_sectores,
+              titulo_profesional: norm.profesion || a.titulo_profesional,
+              codigo_credencial: norm.siglas || a.codigo_credencial,
+            }
+          : a
+      );
+      state.domainData.auditors = state.domainData.auditors.map((a) =>
+        a.id === audId ? { ...a, nombre: norm.nombre } : a
+      );
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'auditor' && seg.entityId === audId
+          ? { ...seg, label: norm.nombre, tooltip: `Auditor > ${norm.nombre}` }
+          : seg
+      );
+
       state.auditorDomain.isEditingAttributes = false;
       state.auditorDomain.formDraft = undefined;
       state.auditorDomain.editErrorMessage = null;
-      state.auditorDomain.activeChildTab = 'competencias';
 
-      const newAudSeg: BreadcrumbSegment = {
-        id: `aud-${newId}`,
-        label: norm.nombre,
-        route: 'certificacion',
-        subview: 'auditors',
-        entityType: 'auditor',
-        entityId: newId,
-        tab: 'competencias',
-        tooltip: `Auditor > ${norm.nombre}`,
-      };
-      if (state.breadcrumbs[state.breadcrumbs.length - 1]?.id === 'auditor-new') {
-        state.breadcrumbs = [...state.breadcrumbs.slice(0, -1), newAudSeg];
-      } else {
-        state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, newAudSeg);
-      }
-
-      recordPhase5SessionLog('auditor', newId, 'INSERT', null, {
-        nombre: norm.nombre,
-        siglas: norm.siglas,
-        cedula_identidad: norm.cedula_identidad,
-      });
-
-      void (async () => {
-        try {
-          const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
-            profile: state.profile,
-            draft: norm,
-            existingAuditors: existingSnapshot,
-            newId,
-          });
-          if (!saveRes.ok) {
-            showFloatingToast(
-              saveRes.error || 'No se pudo guardar el auditor en base de datos.',
-              'warning'
-            );
-            render();
-          }
-        } catch (err) {
-          console.warn('Fallback to reactive state for auditor insert:', err);
+      recordPhase5SessionLog(
+        'auditor',
+        audId,
+        'UPDATE',
+        prevAud
+          ? {
+              nombre: prevAud.nombre,
+              siglas: prevAud.siglas,
+              cedula_identidad: prevAud.cedula_identidad,
+            }
+          : null,
+        {
+          nombre: norm.nombre,
+          siglas: norm.siglas,
+          cedula_identidad: norm.cedula_identidad,
         }
-      })();
+      );
 
-      showFloatingToast(`Auditor "${norm.nombre}" creado correctamente.`, 'success');
+      showFloatingToast('Atributos del auditor guardados exitosamente.', 'success');
+      render();
+    })();
+  });
+
+  // 6.1 Inline Teléfonos del Auditor (telefono_auditor)
+  const syncAuditorTelefonoDraftFromDom = (): AuditorTelefonoFormDraft => {
+    const current = state.auditorDomain.telefonoDraft ?? createEmptyAuditorTelefonoDraft();
+    const numEl = document.getElementById('audTelNumeroInput') as HTMLInputElement | null;
+    const tipoEl = document.getElementById('audTelTipoSelect') as HTMLSelectElement | null;
+    const princEl = document.getElementById('audTelPrincipalInput') as HTMLInputElement | null;
+    const next: AuditorTelefonoFormDraft = {
+      telefono: numEl ? numEl.value : current.telefono,
+      tipo_telefono: tipoEl ? tipoEl.value : current.tipo_telefono,
+      es_principal: princEl ? Boolean(princEl.checked) : current.es_principal,
+    };
+    state.auditorDomain.telefonoDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-auditor-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.auditorDomain.isAddingTelefono = true;
+        state.auditorDomain.telefonoDraft = createEmptyAuditorTelefonoDraft();
+        state.auditorDomain.telefonoErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-auditor-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.auditorDomain.isAddingTelefono = false;
+        state.auditorDomain.telefonoDraft = undefined;
+        state.auditorDomain.telefonoErrorMessage = null;
+        render();
+      });
+    });
+
+  const auditorTelefonoFormEl = document.getElementById('auditorTelefonoForm');
+  auditorTelefonoFormEl?.addEventListener('input', () => {
+    syncAuditorTelefonoDraftFromDom();
+  });
+  auditorTelefonoFormEl?.addEventListener('change', () => {
+    syncAuditorTelefonoDraftFromDom();
+  });
+
+  auditorTelefonoFormEl?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const audId = state.auditorDomain.selectedAuditorId;
+    const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+    if (!aud) return;
+
+    const draft = syncAuditorTelefonoDraftFromDom();
+    const validation = validateAuditorTelefonoDraft(draft, aud.telefonos);
+    if (!validation.valid) {
+      state.auditorDomain.telefonoErrorMessage =
+        validation.message || 'Verifique el número telefónico.';
       render();
       return;
     }
 
-    if (!audId) return;
-    const prevAud = existingSnapshot.find((a) => a.id === audId);
-
-    state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
-      a.id === audId
-        ? {
-            ...a,
-            nombre: norm.nombre,
-            siglas: norm.siglas,
-            cedula_identidad: norm.cedula_identidad,
-            profesion: norm.profesion,
-            esquemas_complementarios: norm.esquemas_complementarios,
-            anio_actualizacion_normas: norm.anio_actualizacion_normas,
-            sistema_gestion_secundario: norm.sistema_gestion_secundario,
-            ultima_evaluacion_in_situ_texto: norm.ultima_evaluacion_in_situ_texto,
-            proxima_evaluacion_in_situ_texto: norm.proxima_evaluacion_in_situ_texto,
-            ultima_evaluacion_in_situ_fecha: norm.ultima_evaluacion_in_situ_fecha,
-            proxima_evaluacion_in_situ_fecha: norm.proxima_evaluacion_in_situ_fecha,
-            sin_registro_evaluacion: norm.sin_registro_evaluacion,
-            sector_area_evaluado_texto: norm.sector_area_evaluado_texto,
-            observaciones_evaluacion: norm.observaciones_evaluacion,
-            anio_actualizacion_sectores: norm.anio_actualizacion_sectores,
-            observacion_sectores: norm.observacion_sectores,
-            titulo_profesional: norm.profesion || a.titulo_profesional,
-            codigo_credencial: norm.siglas || a.codigo_credencial,
-          }
-        : a
-    );
-    state.domainData.auditors = state.domainData.auditors.map((a) =>
-      a.id === audId ? { ...a, nombre: norm.nombre } : a
-    );
-    state.breadcrumbs = state.breadcrumbs.map((seg) =>
-      seg.entityType === 'auditor' && seg.entityId === audId
-        ? { ...seg, label: norm.nombre, tooltip: `Auditor > ${norm.nombre}` }
-        : seg
-    );
-
-    state.auditorDomain.isEditingAttributes = false;
-    state.auditorDomain.formDraft = undefined;
-    state.auditorDomain.editErrorMessage = null;
-
-    recordPhase5SessionLog(
-      'auditor',
-      audId,
-      'UPDATE',
-      prevAud
-        ? {
-            nombre: prevAud.nombre,
-            siglas: prevAud.siglas,
-            cedula_identidad: prevAud.cedula_identidad,
-          }
-        : null,
-      {
-        nombre: norm.nombre,
-        siglas: norm.siglas,
-        cedula_identidad: norm.cedula_identidad,
+    void (async () => {
+      const res = await addTelefonoAuditor({
+        client: getAuditorSupabaseClient(),
+        profile: state.profile,
+        auditorId: aud.id,
+        draft: validation.normalized,
+        existingTelefonos: aud.telefonos,
+      });
+      if (!res.ok || !res.data) {
+        state.auditorDomain.telefonoErrorMessage =
+          res.error || 'No se pudo registrar el teléfono del auditor.';
+        render();
+        return;
       }
-    );
 
-    if (STRICT_UUID_PATTERN.test(audId)) {
-      void (async () => {
-        try {
-          const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+      const createdTel = res.data;
+      const nextTelefonos = [
+        ...(aud.telefonos || []).map((t) =>
+          createdTel.es_principal ? { ...t, es_principal: false } : t
+        ),
+        createdTel,
+      ];
+      const nextPrimaryPhone = getPrimaryAuditorTelefono(nextTelefonos);
+      state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+        a.id === aud.id
+          ? {
+              ...a,
+              telefonos: nextTelefonos,
+              telefono: nextPrimaryPhone || a.telefono,
+            }
+          : a
+      );
+      state.auditorDomain.isAddingTelefono = false;
+      state.auditorDomain.telefonoDraft = undefined;
+      state.auditorDomain.telefonoErrorMessage = null;
+
+      recordPhase5SessionLog('telefono_auditor', createdTel.id, 'INSERT', null, {
+        telefono: createdTel.telefono,
+        tipo_telefono: createdTel.tipo_telefono,
+        es_principal: createdTel.es_principal,
+      });
+      showFloatingToast('Teléfono registrado correctamente.', 'success');
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-primary-auditor-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const telId = btn.dataset.telefonoId || '';
+        const audId = state.auditorDomain.selectedAuditorId;
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        const targetTel = aud?.telefonos.find((t) => t.id === telId && !t.deleted_at);
+        if (!aud || !targetTel) return;
+
+        void (async () => {
+          const res = await setPrimaryTelefonoAuditor({
+            client: getAuditorSupabaseClient(),
             profile: state.profile,
-            auditorId: audId,
-            draft: norm,
-            existingAuditors: existingSnapshot,
+            auditorId: aud.id,
+            telefonoId: telId,
           });
-          if (!saveRes.ok) {
+          if (!res.ok) {
             showFloatingToast(
-              saveRes.error || 'No se pudo actualizar el auditor en base de datos.',
+              res.error || 'No se pudo marcar el teléfono como principal.',
               'warning'
             );
-            render();
+            return;
           }
-        } catch (err) {
-          console.warn('Fallback to reactive state for auditor update:', err);
-        }
-      })();
+          const nextTelefonos = aud.telefonos.map((t) => ({
+            ...t,
+            es_principal: t.id === telId,
+          }));
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  telefonos: nextTelefonos,
+                  telefono: getPrimaryAuditorTelefono(nextTelefonos) || targetTel.telefono,
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'telefono_auditor',
+            telId,
+            'UPDATE',
+            { es_principal: false },
+            { es_principal: true }
+          );
+          showFloatingToast('Teléfono principal actualizado.', 'success');
+          render();
+        })();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-auditor-telefono"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const telId = btn.dataset.telefonoId || '';
+        const audId = state.auditorDomain.selectedAuditorId;
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        const targetTel = aud?.telefonos.find((t) => t.id === telId && !t.deleted_at);
+        if (!aud || !targetTel) return;
+
+        void (async () => {
+          const res = await deleteTelefonoAuditor({
+            client: getAuditorSupabaseClient(),
+            profile: state.profile,
+            telefonoId: telId,
+          });
+          if (!res.ok) {
+            showFloatingToast(res.error || 'No se pudo archivar el teléfono.', 'warning');
+            return;
+          }
+          const nowIso = new Date().toISOString();
+          const nextTelefonos = aud.telefonos.map((t) =>
+            t.id === telId ? { ...t, deleted_at: nowIso } : t
+          );
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  telefonos: nextTelefonos,
+                  telefono: getPrimaryAuditorTelefono(nextTelefonos),
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'telefono_auditor',
+            telId,
+            'UPDATE',
+            { deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast('Teléfono archivado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
+  // 6.2 Inline Correos Electrónicos del Auditor (email_auditor)
+  const syncAuditorEmailDraftFromDom = (): AuditorEmailFormDraft => {
+    const current = state.auditorDomain.emailDraft ?? createEmptyAuditorEmailDraft();
+    const emailEl = document.getElementById('audEmailInput') as HTMLInputElement | null;
+    const tipoEl = document.getElementById('audEmailTipoSelect') as HTMLSelectElement | null;
+    const princEl = document.getElementById('audEmailPrincipalInput') as HTMLInputElement | null;
+    const next: AuditorEmailFormDraft = {
+      email: emailEl ? emailEl.value : current.email,
+      tipo_email: tipoEl ? tipoEl.value : current.tipo_email,
+      es_principal: princEl ? Boolean(princEl.checked) : current.es_principal,
+    };
+    state.auditorDomain.emailDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-auditor-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.auditorDomain.isAddingEmail = true;
+        state.auditorDomain.emailDraft = createEmptyAuditorEmailDraft();
+        state.auditorDomain.emailErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-auditor-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.auditorDomain.isAddingEmail = false;
+        state.auditorDomain.emailDraft = undefined;
+        state.auditorDomain.emailErrorMessage = null;
+        render();
+      });
+    });
+
+  const auditorEmailFormEl = document.getElementById('auditorEmailForm');
+  auditorEmailFormEl?.addEventListener('input', () => {
+    syncAuditorEmailDraftFromDom();
+  });
+  auditorEmailFormEl?.addEventListener('change', () => {
+    syncAuditorEmailDraftFromDom();
+  });
+
+  auditorEmailFormEl?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const audId = state.auditorDomain.selectedAuditorId;
+    const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+    if (!aud) return;
+
+    const draft = syncAuditorEmailDraftFromDom();
+    const validation = validateAuditorEmailDraft(draft, aud.emails);
+    if (!validation.valid) {
+      state.auditorDomain.emailErrorMessage =
+        validation.message || 'Verifique el correo electrónico.';
+      render();
+      return;
     }
 
-    showFloatingToast('Atributos del auditor guardados exitosamente.', 'success');
-    render();
+    void (async () => {
+      const res = await addEmailAuditor({
+        client: getAuditorSupabaseClient(),
+        profile: state.profile,
+        auditorId: aud.id,
+        draft: validation.normalized,
+        existingEmails: aud.emails,
+      });
+      if (!res.ok || !res.data) {
+        state.auditorDomain.emailErrorMessage =
+          res.error || 'No se pudo registrar el correo electrónico.';
+        render();
+        return;
+      }
+
+      const createdEmail = res.data;
+      const nextEmails = [
+        ...(aud.emails || []).map((em) =>
+          createdEmail.es_principal ? { ...em, es_principal: false } : em
+        ),
+        createdEmail,
+      ];
+      const nextPrimaryEmail = getPrimaryAuditorEmail(nextEmails);
+      state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+        a.id === aud.id
+          ? {
+              ...a,
+              emails: nextEmails,
+              email: nextPrimaryEmail || a.email,
+            }
+          : a
+      );
+      state.auditorDomain.isAddingEmail = false;
+      state.auditorDomain.emailDraft = undefined;
+      state.auditorDomain.emailErrorMessage = null;
+
+      recordPhase5SessionLog('email_auditor', createdEmail.id, 'INSERT', null, {
+        email: createdEmail.email,
+        tipo_email: createdEmail.tipo_email,
+        es_principal: createdEmail.es_principal,
+      });
+      showFloatingToast('Correo electrónico registrado correctamente.', 'success');
+      render();
+    })();
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="set-primary-auditor-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const emailId = btn.dataset.emailId || '';
+        const audId = state.auditorDomain.selectedAuditorId;
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        const targetEmail = aud?.emails.find((em) => em.id === emailId && !em.deleted_at);
+        if (!aud || !targetEmail) return;
+
+        void (async () => {
+          const res = await setPrimaryEmailAuditor({
+            client: getAuditorSupabaseClient(),
+            profile: state.profile,
+            auditorId: aud.id,
+            emailId,
+          });
+          if (!res.ok) {
+            showFloatingToast(
+              res.error || 'No se pudo marcar el correo como principal.',
+              'warning'
+            );
+            return;
+          }
+          const nextEmails = aud.emails.map((em) => ({
+            ...em,
+            es_principal: em.id === emailId,
+          }));
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  emails: nextEmails,
+                  email: getPrimaryAuditorEmail(nextEmails) || targetEmail.email,
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'email_auditor',
+            emailId,
+            'UPDATE',
+            { es_principal: false },
+            { es_principal: true }
+          );
+          showFloatingToast('Correo principal actualizado.', 'success');
+          render();
+        })();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-auditor-email"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const emailId = btn.dataset.emailId || '';
+        const audId = state.auditorDomain.selectedAuditorId;
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        const targetEmail = aud?.emails.find((em) => em.id === emailId && !em.deleted_at);
+        if (!aud || !targetEmail) return;
+
+        void (async () => {
+          const res = await deleteEmailAuditor({
+            client: getAuditorSupabaseClient(),
+            profile: state.profile,
+            emailId,
+          });
+          if (!res.ok) {
+            showFloatingToast(
+              res.error || 'No se pudo archivar el correo electrónico.',
+              'warning'
+            );
+            return;
+          }
+          const nowIso = new Date().toISOString();
+          const nextEmails = aud.emails.map((em) =>
+            em.id === emailId ? { ...em, deleted_at: nowIso } : em
+          );
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  emails: nextEmails,
+                  email: getPrimaryAuditorEmail(nextEmails),
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'email_auditor',
+            emailId,
+            'UPDATE',
+            { deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast('Correo electrónico archivado correctamente.', 'success');
+          render();
+        })();
+      });
+    });
+
+  // 6.3 Inline Evaluaciones In Situ del Auditor (evaluacion_in_situ_auditor + Marcar como S/R)
+  const syncAuditorEvaluacionDraftFromDom = (): EvaluacionInSituFormDraft => {
+    const current =
+      state.auditorDomain.evaluacionDraft ?? createEmptyEvaluacionInSituDraft();
+    const readVal = (id: string): string | null => {
+      const el = document.getElementById(id) as
+        | HTMLInputElement
+        | HTMLTextAreaElement
+        | null;
+      return el ? el.value : null;
+    };
+    const periodoVal = readVal('audEvalPeriodoInput');
+    const normaVal = readVal('audEvalNormaInput');
+    const sectorVal = readVal('audEvalSectorInput');
+    const ultFechaVal = readVal('audEvalUltFechaInput');
+    const proxFechaVal = readVal('audEvalProxFechaInput');
+    const ultTextoVal = readVal('audEvalUltTextoInput');
+    const proxTextoVal = readVal('audEvalProxTextoInput');
+    const obsVal = readVal('audEvalObsInput');
+
+    const next: EvaluacionInSituFormDraft = {
+      etiqueta_periodo: periodoVal ?? current.etiqueta_periodo,
+      norma_referencia: normaVal ?? current.norma_referencia,
+      sector_area_evaluado: sectorVal ?? current.sector_area_evaluado,
+      ultima_evaluacion_fecha:
+        ultFechaVal !== null ? ultFechaVal.trim() || null : current.ultima_evaluacion_fecha,
+      proxima_evaluacion_fecha:
+        proxFechaVal !== null ? proxFechaVal.trim() || null : current.proxima_evaluacion_fecha,
+      ultima_evaluacion_texto: ultTextoVal ?? current.ultima_evaluacion_texto,
+      proxima_evaluacion_texto: proxTextoVal ?? current.proxima_evaluacion_texto,
+      observaciones: obsVal ?? current.observaciones,
+    };
+    state.auditorDomain.evaluacionDraft = next;
+    return next;
+  };
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="open-add-auditor-evaluacion"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.auditorDomain.isAddingEvaluacion = true;
+        state.auditorDomain.evaluacionDraft = createEmptyEvaluacionInSituDraft();
+        state.auditorDomain.evaluacionErrorMessage = null;
+        render();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-add-auditor-evaluacion"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.auditorDomain.isAddingEvaluacion = false;
+        state.auditorDomain.evaluacionDraft = undefined;
+        state.auditorDomain.evaluacionErrorMessage = null;
+        render();
+      });
+    });
+
+  const auditorEvaluacionFormEl = document.getElementById('auditorEvaluacionForm');
+  auditorEvaluacionFormEl?.addEventListener('input', () => {
+    syncAuditorEvaluacionDraftFromDom();
+  });
+  auditorEvaluacionFormEl?.addEventListener('change', () => {
+    syncAuditorEvaluacionDraftFromDom();
+  });
+
+  auditorEvaluacionFormEl?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!isApprovedStaff()) return;
+    const audId = state.auditorDomain.selectedAuditorId;
+    const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+    if (!aud) return;
+
+    const draft = syncAuditorEvaluacionDraftFromDom();
+    const validation = validateEvaluacionInSituDraft(draft);
+    if (!validation.valid) {
+      state.auditorDomain.evaluacionErrorMessage =
+        validation.message || 'Verifique los datos de la evaluación in situ.';
+      render();
+      return;
+    }
+
+    void (async () => {
+      const res = await addEvaluacionInSituAuditor({
+        client: getAuditorSupabaseClient(),
+        profile: state.profile,
+        auditorId: aud.id,
+        draft: validation.normalized,
+        existingEvaluaciones: aud.evaluaciones_in_situ,
+      });
+      if (!res.ok || !res.data) {
+        state.auditorDomain.evaluacionErrorMessage =
+          res.error || 'No se pudo registrar la evaluación in situ.';
+        render();
+        return;
+      }
+
+      const { evaluacion: createdEval, summary } = res.data;
+      const nextEvaluaciones = [...(aud.evaluaciones_in_situ || []), createdEval];
+      const nextSinRegistro = false;
+      if (summary.sin_registro_evaluacion) {
+        await getAuditorSupabaseClient()
+          .from('auditor')
+          .update({
+            sin_registro_evaluacion: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', aud.id)
+          .is('deleted_at', null);
+      }
+
+      const nextUltFecha =
+        summary.ultima_evaluacion_in_situ_fecha ?? createdEval.ultima_evaluacion_fecha ?? null;
+      const nextProxFecha =
+        summary.proxima_evaluacion_in_situ_fecha ?? createdEval.proxima_evaluacion_fecha ?? null;
+
+      state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+        a.id === aud.id
+          ? {
+              ...a,
+              evaluaciones_in_situ: nextEvaluaciones,
+              ultima_evaluacion_in_situ_fecha: nextUltFecha,
+              proxima_evaluacion_in_situ_fecha: nextProxFecha,
+              ultima_evaluacion_in_situ_texto:
+                createdEval.ultima_evaluacion_texto || a.ultima_evaluacion_in_situ_texto,
+              proxima_evaluacion_in_situ_texto:
+                createdEval.proxima_evaluacion_texto || a.proxima_evaluacion_in_situ_texto,
+              sin_registro_evaluacion: nextSinRegistro,
+            }
+          : a
+      );
+      state.auditorDomain.isAddingEvaluacion = false;
+      state.auditorDomain.evaluacionDraft = undefined;
+      state.auditorDomain.evaluacionErrorMessage = null;
+
+      recordPhase5SessionLog('evaluacion_in_situ_auditor', createdEval.id, 'INSERT', null, {
+        etiqueta_periodo: createdEval.etiqueta_periodo,
+        ultima_evaluacion_fecha: createdEval.ultima_evaluacion_fecha,
+        proxima_evaluacion_fecha: createdEval.proxima_evaluacion_fecha,
+      });
+      showFloatingToast('Evaluación in situ registrada correctamente.', 'success');
+      render();
+    })();
+  });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-auditor-sin-registro"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const audId = btn.dataset.auditorId || state.auditorDomain.selectedAuditorId || '';
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        if (!aud) return;
+
+        const nextDraft: AuditorFormDraft = {
+          ...createAuditorDraftFromEntity(aud),
+          sin_registro_evaluacion: true,
+        };
+
+        void (async () => {
+          if (STRICT_UUID_PATTERN.test(aud.id)) {
+            const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
+              profile: state.profile,
+              auditorId: aud.id,
+              draft: nextDraft,
+              existingAuditors: state.domainData.allAuditorsDetailed,
+            });
+            if (!saveRes.ok) {
+              showFloatingToast(
+                saveRes.error || 'No se pudo marcar el auditor como S/R.',
+                'warning'
+              );
+              return;
+            }
+          }
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  sin_registro_evaluacion: true,
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'auditor',
+            aud.id,
+            'UPDATE',
+            { sin_registro_evaluacion: aud.sin_registro_evaluacion },
+            { sin_registro_evaluacion: true }
+          );
+          showFloatingToast('Auditor marcado como S/R (Sin Registro de Evaluación).', 'success');
+          render();
+        })();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="archive-auditor-evaluacion"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const evalId = btn.dataset.evaluacionId || '';
+        const audId = state.auditorDomain.selectedAuditorId;
+        const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
+        const targetEval = aud?.evaluaciones_in_situ.find((ev) => ev.id === evalId && !ev.deleted_at);
+        if (!aud || !targetEval) return;
+
+        void (async () => {
+          const res = await deleteEvaluacionInSituAuditor({
+            client: getAuditorSupabaseClient(),
+            profile: state.profile,
+            auditorId: aud.id,
+            evaluacionId: evalId,
+            existingEvaluaciones: aud.evaluaciones_in_situ,
+          });
+          if (!res.ok || !res.data) {
+            showFloatingToast(
+              res.error || 'No se pudo archivar la evaluación in situ.',
+              'warning'
+            );
+            return;
+          }
+          const nowIso = new Date().toISOString();
+          const nextEvaluaciones = aud.evaluaciones_in_situ.map((ev) =>
+            ev.id === evalId ? { ...ev, deleted_at: nowIso } : ev
+          );
+          const recalculatedSummary = summarizeEvaluacionesInSitu(nextEvaluaciones);
+          const nextSummary = res.data.summary ?? recalculatedSummary;
+
+          state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((a) =>
+            a.id === aud.id
+              ? {
+                  ...a,
+                  evaluaciones_in_situ: nextEvaluaciones,
+                  ultima_evaluacion_in_situ_fecha: nextSummary.ultima_evaluacion_in_situ_fecha,
+                  proxima_evaluacion_in_situ_fecha: nextSummary.proxima_evaluacion_in_situ_fecha,
+                  sin_registro_evaluacion: nextSummary.sin_registro_evaluacion,
+                }
+              : a
+          );
+          recordPhase5SessionLog(
+            'evaluacion_in_situ_auditor',
+            evalId,
+            'UPDATE',
+            { deleted_at: null },
+            { deleted_at: nowIso }
+          );
+          showFloatingToast('Evaluación in situ archivada correctamente.', 'success');
+          render();
+        })();
+      });
+    });
 
   // 7. Competencia de Auditor: Add Mode & Read Mode + Live Sector -> Subsector Cascade
   document.querySelectorAll<HTMLElement>('[data-action="open-add-competency"]').forEach((btn) => {
@@ -26313,6 +27031,8 @@ function bindAuthenticatedEvents(): void {
         if (state.certificadoDomain.selectedCertId) {
           syncCurrentBreadcrumbTab('auditorias');
         } else if (state.expertoTecnicoDomain.selectedExpertoId) {
+          syncCurrentBreadcrumbTab('historial');
+        } else if (state.auditorDomain.selectedAuditorId) {
           syncCurrentBreadcrumbTab('historial');
         }
         state.activeRoute = 'auditorias';
@@ -32278,6 +32998,10 @@ async function confirmArchiveRecord(): Promise<void> {
       state.domainData.auditors = state.domainData.auditors.filter(
         (a) => a.id !== recordId
       );
+      if (state.auditorDomain.selectedAuditorId === recordId) {
+        state.auditorDomain.selectedAuditorId = null;
+        state.auditorDomain.isEditingAttributes = false;
+      }
       break;
     }
     case 'experto_tecnico': {
@@ -33417,7 +34141,7 @@ async function handleRestoreArchivedRecord(
           !state.domainData.allAuditorsDetailed.some((a) => a.id === recordId)
         ) {
           state.domainData.allAuditorsDetailed = [
-            snapshot.auditorDetail,
+            { ...snapshot.auditorDetail, deleted_at: null },
             ...state.domainData.allAuditorsDetailed,
           ];
         }
@@ -33426,6 +34150,9 @@ async function handleRestoreArchivedRecord(
           !state.domainData.auditors.some((a) => a.id === recordId)
         ) {
           state.domainData.auditors = [snapshot.auditorLegacy, ...state.domainData.auditors];
+        }
+        if (STRICT_UUID_PATTERN.test(recordId)) {
+          void loadDomainData();
         }
         break;
       }
@@ -34425,6 +35152,15 @@ function resetClientSessionState(): void {
     facetSelections: {},
     isCreating: false,
     createErrorMessage: null,
+    isAddingTelefono: false,
+    telefonoDraft: undefined,
+    telefonoErrorMessage: null,
+    isAddingEmail: false,
+    emailDraft: undefined,
+    emailErrorMessage: null,
+    isAddingEvaluacion: false,
+    evaluacionDraft: undefined,
+    evaluacionErrorMessage: null,
   };
   state.expertoTecnicoDomain = createDefaultExpertoTecnicoViewState();
   state.competenciaAuditorDomain = {

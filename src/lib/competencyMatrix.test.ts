@@ -37,6 +37,8 @@ import {
   summarizeAuditorSectorCoverage,
   resolveAuditorInSituFacetBucket,
   buildAuditorSearchableText,
+  sortEvaluacionesInSituChronological,
+  formatAuditorSelectorLabel,
   type AuditorDetailEntity,
   type CompetenciaAuditorEntity,
 } from './competencyMatrix';
@@ -1121,4 +1123,372 @@ describe('Step 3.1 - Auditor Multi View Helpers, List/Grid Rendering & Reactive 
     assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
   });
 });
+
+describe('Step 3.2 - Auditor Detail View (3 Zones, 4 Child Tabs, Archive/Restore, RBAC & Homonym Disambiguation)', () => {
+  const jrpAuditor = INITIAL_AUDITORES_DETAILED[2]; // Has observacion_sectores with Experto Técnico + historial
+  const baseTemplate = INITIAL_AUDITORES_DETAILED[0];
+
+  const multiEvalAuditor: AuditorDetailEntity = {
+    ...baseTemplate,
+    id: '10000000-0000-0000-0000-000000000088',
+    nombre: 'Félix Horacio Rojas Machado',
+    siglas: 'FR',
+    cedula_identidad: '4165827',
+    profesion: 'INGENIERO QUÍMICO',
+    esquemas_complementarios: 'MARCA / HACCP',
+    anio_actualizacion_normas: 2024,
+    anio_actualizacion_sectores: 2024,
+    sistema_gestion_secundario: 'FSSC 22000',
+    sin_registro_evaluacion: false,
+    ultima_evaluacion_in_situ_fecha: '2024-11-01',
+    proxima_evaluacion_in_situ_fecha: '2027-11-01',
+    ultima_evaluacion_in_situ_texto: 'nov-24',
+    proxima_evaluacion_in_situ_texto: 'nov-27',
+    sector_area_evaluado_texto: '17 / 17.1',
+    observaciones_evaluacion: 'Desempeño satisfactorio en testigo in situ',
+    observacion_sectores: 'Sector 9 y 38 con Experto Técnico obligatorio.',
+    telefonos: [
+      {
+        id: '1b100000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        telefono: '0414-5550101',
+        tipo_telefono: 'Móvil',
+        es_principal: true,
+        deleted_at: null,
+      },
+      {
+        id: '1b100000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        telefono: '0212-5550202',
+        tipo_telefono: 'Oficina',
+        es_principal: false,
+        deleted_at: null,
+      },
+    ],
+    emails: [
+      {
+        id: '1b200000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        email: 'admin@fondonorma.test',
+        tipo_email: 'Principal',
+        es_principal: true,
+        deleted_at: null,
+      },
+      {
+        id: '1b200000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        email: 'frojas.alt@fondonorma.org',
+        tipo_email: 'Secundario',
+        es_principal: false,
+        deleted_at: null,
+      },
+    ],
+    evaluaciones_in_situ: [
+      {
+        id: '1b300000-0000-0000-0000-000000000001',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        etiqueta_periodo: 'Evaluación 1 (may-15)',
+        norma_referencia: 'ISO 9001:2015',
+        sector_area_evaluado: '14',
+        ultima_evaluacion_fecha: '2015-05-01',
+        proxima_evaluacion_fecha: '2018-05-01',
+        ultima_evaluacion_texto: 'may-15',
+        proxima_evaluacion_texto: 'may-18',
+        observaciones: 'Primera evaluación testigo',
+        deleted_at: null,
+      },
+      {
+        id: '1b300000-0000-0000-0000-000000000002',
+        id_auditor: '10000000-0000-0000-0000-000000000088',
+        etiqueta_periodo: 'Evaluación 2 (nov-24)',
+        norma_referencia: 'ISO 9001:2015',
+        sector_area_evaluado: '17 / 17.1',
+        ultima_evaluacion_fecha: '2024-11-01',
+        proxima_evaluacion_fecha: '2027-11-01',
+        ultima_evaluacion_texto: 'nov-24',
+        proxima_evaluacion_texto: 'nov-27',
+        observaciones: 'Renovación periódica',
+        deleted_at: null,
+      },
+    ],
+    historialAuditorias: jrpAuditor.historialAuditorias.length > 0
+      ? jrpAuditor.historialAuditorias
+      : [
+          {
+            id: '1b400000-0000-0000-0000-000000000001',
+            codigo_auditoria: 'AUD-2026-009',
+            numero_certificado: 'FN-9001-2026',
+            organizacion_nombre: 'Industrias Ejemplo C.A.',
+            tipo_auditoria: 'Seguimiento 1',
+            metodologia: 'Presencial',
+            rol_en_auditoria: 'AUDITOR_LIDER',
+            fecha_ejecucion: '2026-05-12',
+            estatus: 'Completada',
+          },
+        ],
+  };
+
+  it('sorts evaluaciones in situ chronologically (newest first) and formats homonym selector labels', () => {
+    const sorted = sortEvaluacionesInSituChronological(multiEvalAuditor.evaluaciones_in_situ);
+    assert.equal(sorted.length, 2);
+    assert.equal(sorted[0].etiqueta_periodo, 'Evaluación 2 (nov-24)');
+    assert.equal(sorted[1].etiqueta_periodo, 'Evaluación 1 (may-15)');
+
+    const label = formatAuditorSelectorLabel({
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '12310919',
+    });
+    assert.equal(label, 'Yurima Carrillo (YC · C.I. 12310919)');
+  });
+
+  it('renders 3-zone Detail View in read, add, and edit modes with Experto Técnico alert and archive/restore RBAC', () => {
+    const baseState = {
+      selectedAuditorId: multiEvalAuditor.id,
+      activeChildTab: 'competencias' as const,
+      query: '',
+      selectedCalificacion: 'ALL' as const,
+      selectedStandard: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'list' as const,
+      sortColumn: null,
+      sortDirection: 'none' as const,
+      isEditingAttributes: false,
+    };
+
+    const readHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: baseState,
+      auditors: [multiEvalAuditor],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      authUserEmail: 'admin@fondonorma.test',
+    });
+    assert.ok(readHtml.includes('FR · C.I. 4165827'));
+    assert.ok(readHtml.includes('Identidad'));
+    assert.ok(readHtml.includes('Calificación Normativa y Sectorial'));
+    assert.ok(readHtml.includes('Resumen de Evaluación In Situ'));
+    assert.ok(readHtml.includes('Acompañamiento Obligatorio con Experto Técnico'));
+    assert.ok(readHtml.includes('Sectores IAF 9, 38'));
+    assert.ok(readHtml.includes('id="startEditAuditorBtn"'));
+    assert.ok(readHtml.includes('data-archive-table="auditor"'));
+    assert.ok(readHtml.includes('data-auditor-tab="competencias"'));
+    assert.ok(readHtml.includes('data-auditor-tab="contacto"'));
+    assert.ok(readHtml.includes('data-auditor-tab="evaluaciones"'));
+    assert.ok(readHtml.includes('data-auditor-tab="historial"'));
+    assert.equal(assertZeroUuidExposure(readHtml).compliant, true);
+
+    const addHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        ...baseState,
+        selectedAuditorId: null,
+        isCreating: true,
+        editErrorMessage: 'Ya existe un auditor activo con esa cédula de identidad.',
+      },
+      auditors: [multiEvalAuditor],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(addHtml.includes('Nuevo Auditor'));
+    assert.ok(addHtml.includes('id="auditorDetailForm"'));
+    assert.ok(addHtml.includes('id="auditorNombreInput"'));
+    assert.ok(addHtml.includes('id="auditorSiglasInput"'));
+    assert.ok(addHtml.includes('id="auditorCedulaInput"'));
+    assert.ok(addHtml.includes('id="auditorObsSectoresInput"'));
+    assert.ok(addHtml.includes('id="saveAuditorFormBtn"'));
+    assert.ok(addHtml.includes('Ya existe un auditor activo con esa cédula de identidad.'));
+    assert.equal(addHtml.includes('data-auditor-tab='), false);
+    assert.equal(assertZeroUuidExposure(addHtml).compliant, true);
+
+    const archivedHtmlAdmin = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: baseState,
+      auditors: [{ ...multiEvalAuditor, deleted_at: '2026-06-01T00:00:00Z' }],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(archivedHtmlAdmin.includes('Archivado'));
+    assert.ok(archivedHtmlAdmin.includes('data-action="restore-archived-record"'));
+    assert.equal(archivedHtmlAdmin.includes('id="startEditAuditorBtn"'), false);
+
+    const archivedHtmlWorker = renderAuditorView({
+      profile: { ...ADMIN_TEST_PROFILE, role: 'WORKER' },
+      state: baseState,
+      auditors: [{ ...multiEvalAuditor, deleted_at: '2026-06-01T00:00:00Z' }],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(archivedHtmlWorker.includes('data-action="restore-archived-record"'), false);
+  });
+
+  it('renders Contacto, Evaluaciones In Situ, and Historial child tabs cleanly and enforces strict read-only RBAC for AUDITOR & CLIENT', () => {
+    const baseState = {
+      selectedAuditorId: multiEvalAuditor.id,
+      activeChildTab: 'contacto' as const,
+      query: '',
+      selectedCalificacion: 'ALL' as const,
+      selectedStandard: 'ALL',
+      selectedSectorIaf: 'ALL',
+      viewMode: 'list' as const,
+      sortColumn: null,
+      sortDirection: 'none' as const,
+      isEditingAttributes: false,
+    };
+
+    const contactoHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        ...baseState,
+        activeChildTab: 'contacto',
+        isAddingTelefono: true,
+        isAddingEmail: true,
+      },
+      auditors: [multiEvalAuditor],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+      authUserEmail: 'admin@fondonorma.test',
+    });
+    assert.ok(contactoHtml.includes('id="auditorTelefonoForm"'));
+    assert.ok(contactoHtml.includes('id="auditorEmailForm"'));
+    assert.ok(contactoHtml.includes('0414-5550101'));
+    assert.ok(contactoHtml.includes('Correo vinculado al acceso Auth'));
+    assert.ok(contactoHtml.includes('data-action="set-primary-auditor-telefono"'));
+    assert.ok(contactoHtml.includes('data-action="archive-auditor-email"'));
+    assert.equal(assertZeroUuidExposure(contactoHtml).compliant, true);
+
+    const evalHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        ...baseState,
+        activeChildTab: 'evaluaciones',
+        isAddingEvaluacion: true,
+      },
+      auditors: [multiEvalAuditor],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(evalHtml.includes('id="auditorEvaluacionForm"'));
+    assert.ok(evalHtml.includes('Evaluación 2 (nov-24)'));
+    assert.ok(evalHtml.includes('Evaluación 1 (may-15)'));
+    assert.ok(evalHtml.includes('data-action="toggle-auditor-sin-registro"'));
+    assert.ok(evalHtml.includes('data-action="archive-auditor-evaluacion"'));
+    assert.equal(assertZeroUuidExposure(evalHtml).compliant, true);
+
+    const histHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        ...baseState,
+        activeChildTab: 'historial',
+      },
+      auditors: [multiEvalAuditor],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(histHtml.includes('data-resizable-table="auditor-tab-historial"'));
+    assert.ok(histHtml.includes('table-fixed'));
+    const colWidths = [...histHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%;"/g)].map((m) =>
+      Number(m[1])
+    );
+    assert.ok(colWidths.length >= 6);
+    assert.ok(Math.abs(colWidths.reduce((a, b) => a + b, 0) - 100) < 0.05);
+    const tbodyMatch = histHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+    assert.ok(tbodyMatch);
+    assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
+    assert.ok(tbodyMatch[0].includes('data-action="select-prog-audit-by-code"'));
+    assert.equal(assertZeroUuidExposure(histHtml).compliant, true);
+
+    for (const readonlyRole of ['AUDITOR', 'CLIENT'] as const) {
+      for (const tab of ['competencias', 'contacto', 'evaluaciones', 'historial'] as const) {
+        const roHtml = renderAuditorView({
+          profile: { ...ADMIN_TEST_PROFILE, role: readonlyRole },
+          state: { ...baseState, activeChildTab: tab },
+          auditors: [multiEvalAuditor],
+          normas: INITIAL_NORMAS,
+          sectores: INITIAL_SECTORES_IAF,
+          subsectores: INITIAL_SUBSECTORES_IAF,
+        });
+        assert.equal(roHtml.includes('id="startEditAuditorBtn"'), false);
+        assert.equal(roHtml.includes('data-archive-table="auditor"'), false);
+        assert.equal(roHtml.includes('data-action="open-add-competency"'), false);
+        assert.equal(roHtml.includes('data-action="open-add-auditor-telefono"'), false);
+        assert.equal(roHtml.includes('data-action="open-add-auditor-email"'), false);
+        assert.equal(roHtml.includes('data-action="archive-auditor-telefono"'), false);
+        assert.equal(roHtml.includes('data-action="archive-auditor-email"'), false);
+        assert.equal(roHtml.includes('data-action="open-add-auditor-evaluacion"'), false);
+        assert.equal(roHtml.includes('data-action="toggle-auditor-sin-registro"'), false);
+        assert.equal(roHtml.includes('data-action="archive-auditor-evaluacion"'), false);
+      }
+    }
+  });
+
+  it('disambiguates homonymous auditors in CompetenciaAuditorView selector and chip', () => {
+    const yc1: AuditorDetailEntity = {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000091',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '7137643',
+      codigo_credencial: 'YC',
+    };
+    const yc2: AuditorDetailEntity = {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000092',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '12310919',
+      codigo_credencial: 'YC',
+    };
+
+    const addCompHtml = renderCompetenciaAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'add',
+        prefillAuditorId: yc2.id,
+        formDraft: {
+          id_auditor: yc2.id,
+          tipo: 'norma',
+          id_norma: '',
+          id_sector_iaf: '',
+          id_subsector_iaf: '',
+        },
+      },
+      auditors: [yc1, yc2],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(addCompHtml.includes('Yurima Carrillo (YC · C.I. 7137643)'));
+    assert.ok(addCompHtml.includes('Yurima Carrillo (YC · C.I. 12310919)'));
+    assert.equal(assertZeroUuidExposure(addCompHtml).compliant, true);
+
+    const readCompHtml = renderCompetenciaAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        isOpen: true,
+        mode: 'read',
+        selectedComp: {
+          id_auditor: yc2.id,
+          tipo: 'norma',
+          targetId: INITIAL_NORMAS[0].id,
+        },
+      },
+      auditors: [yc1, yc2],
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.ok(readCompHtml.includes('Yurima Carrillo (YC · C.I. 12310919)'));
+    assert.equal(assertZeroUuidExposure(readCompHtml).compliant, true);
+  });
+});
+
 
