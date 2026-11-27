@@ -19,10 +19,14 @@ import {
   evaluateAuditTurnoCompleteness,
   formatMatrixShiftLabel,
   formatTurnoTime,
+  isGenericTurnoDescription,
   isOvernightShift,
+  resolveCustomTurnoDescription,
   resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
   resolveTurnoDetailMode,
+  resolveTurnoUpsertPlan,
+  saveCustomTurnoDescription,
   validateTurnoFormDraft,
   validateTurnoInput,
 } from './turnoDomain';
@@ -558,5 +562,296 @@ test('Step 7.1: Anti-Fatigue 5. Turno matrix, batch pending apply, column toggle
   assert.equal(certRows[0].coveredProcessesCount, 1);
   assert.equal(certRows[0].selectedProcessesCount, 3);
 });
+
+test('Turno catalog reuse, shared-site turno_certificado_compartido linking, edit relink, and custom description resolution', () => {
+  const ownerCertId = '14c1c36d-636e-437e-97ba-08ad845908f1';
+  const sharedCertId = 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b';
+  const sharedVerId = '2a36039f-fa67-47aa-b5d3-fd482e165097';
+  const sharedSiteId = '6efe5ad5-81a8-4a06-8107-1b7b65712ca7';
+  const shift8to17Id = '70000000-0000-0000-0000-000000000004';
+  const shift8to16Id = '9b63b68a-1120-4173-8fdf-dfa3d1eebd98';
+  const tps8to16Id = '3fe63b57-99e8-41fa-a36b-4391f9a88e76';
+
+  const shiftCatalog = [
+    {
+      id: shift8to17Id,
+      hora_entrada: '08:00:00',
+      hora_salida: '17:00:00',
+      descripcion: 'Administrativo (Otro Org)',
+    },
+    {
+      id: shift8to16Id,
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Turno 08:00 – 16:00',
+    },
+  ];
+
+  const baseCert45001: typeof INITIAL_CERTIFICADOS_DETAILED[number] = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: sharedCertId,
+    id_certificado_version: sharedVerId,
+    numero_certificado: '45001-41-03-10-2020',
+    sitios: [
+      {
+        id: sharedSiteId,
+        id_certificado: ownerCertId,
+        ownerCertId,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta CADIPRO',
+        direccion_sitio: 'Táchira',
+        personal_count: 102,
+        turnos_por_sitio: [
+          {
+            id: tps8to16Id,
+            id_sitio: sharedSiteId,
+            id_turno: shift8to16Id,
+            hora_entrada: '08:00:00',
+            hora_salida: '16:00:00',
+            descripcion: 'Administrativo',
+            deleted_at: null,
+          },
+        ],
+      },
+    ],
+    turnos: [
+      {
+        id: shift8to16Id,
+        hora_entrada: '08:00:00',
+        hora_salida: '16:00:00',
+        descripcion: 'Administrativo',
+        sitios_vinculados: ['Planta CADIPRO'],
+      },
+    ],
+  };
+
+  // 1. Create 08:00 - 17:00 on shared site when catalog already has 08:00 - 17:00 globally -> reuse_and_link + needsShareLink=true
+  const createReusePlan = resolveTurnoUpsertPlan({
+    mode: 'create',
+    normalized: {
+      hora_entrada: '08:00:00',
+      hora_salida: '17:00:00',
+      descripcion: 'Administrativo',
+    },
+    selectedSitioId: sharedSiteId,
+    activeCertId: sharedCertId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(createReusePlan.valid, true);
+  assert.equal(createReusePlan.action, 'reuse_and_link');
+  assert.equal(createReusePlan.targetTurnoId, shift8to17Id);
+  assert.equal(createReusePlan.needsTurnoInsert, false);
+  assert.equal(createReusePlan.needsTurnosPorSitioInsert, true);
+  assert.equal(createReusePlan.needsShareLink, true);
+  assert.equal(createReusePlan.activeCertVersionId, sharedVerId);
+
+  // 2. Create brand-new schedule 07:00 - 15:00 on shared site -> create_new_and_link + needsShareLink=true
+  const createNewPlan = resolveTurnoUpsertPlan({
+    mode: 'create',
+    normalized: {
+      hora_entrada: '07:00:00',
+      hora_salida: '15:00:00',
+      descripcion: 'Planta Mañana',
+    },
+    selectedSitioId: sharedSiteId,
+    activeCertId: sharedCertId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(createNewPlan.valid, true);
+  assert.equal(createNewPlan.action, 'create_new_and_link');
+  assert.equal(createNewPlan.needsTurnoInsert, true);
+  assert.equal(createNewPlan.needsTurnosPorSitioInsert, true);
+  assert.equal(createNewPlan.needsShareLink, true);
+
+  // 3. Create 08:00 - 16:00 again on same site & same certificate -> duplicate error
+  const createDuplicatePlan = resolveTurnoUpsertPlan({
+    mode: 'create',
+    normalized: {
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Duplicado',
+    },
+    selectedSitioId: sharedSiteId,
+    activeCertId: sharedCertId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(createDuplicatePlan.valid, false);
+  assert.ok(createDuplicatePlan.error?.includes('ya tiene asignado'));
+
+  // 4. Edit 08:00 - 16:00 -> 08:00 - 17:00 (existing catalog shift from another org) -> relink_to_existing_catalog
+  const editRelinkPlan = resolveTurnoUpsertPlan({
+    mode: 'edit',
+    currentTurnoId: shift8to16Id,
+    normalized: {
+      hora_entrada: '08:00:00',
+      hora_salida: '17:00:00',
+      descripcion: 'Administrativo',
+    },
+    activeCertId: sharedCertId,
+    originatingSitioId: sharedSiteId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(editRelinkPlan.valid, true);
+  assert.equal(editRelinkPlan.action, 'relink_to_existing_catalog');
+  assert.equal(editRelinkPlan.targetTurnoId, shift8to17Id);
+  assert.equal(editRelinkPlan.oldTurnoId, shift8to16Id);
+  assert.equal(editRelinkPlan.needsShareLink, true);
+  assert.deepEqual(editRelinkPlan.relinkSites, [
+    {
+      sitioId: sharedSiteId,
+      sitioNombre: 'Planta CADIPRO',
+      ownerCertId,
+      oldTpsIds: [tps8to16Id],
+    },
+  ]);
+
+  // 5. Edit 08:00 - 16:00 -> 08:00 - 16:00 (metadata change only) -> update_metadata_only
+  const editMetaPlan = resolveTurnoUpsertPlan({
+    mode: 'edit',
+    currentTurnoId: shift8to16Id,
+    normalized: {
+      hora_entrada: '08:00:00',
+      hora_salida: '16:00:00',
+      descripcion: 'Administrativo',
+    },
+    activeCertId: sharedCertId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(editMetaPlan.valid, true);
+  assert.equal(editMetaPlan.action, 'update_metadata_only');
+
+  // 6. Edit 08:00 - 16:00 -> 09:00 - 18:00 (unmatched in catalog) -> update_schedule
+  const editSchedulePlan = resolveTurnoUpsertPlan({
+    mode: 'edit',
+    currentTurnoId: shift8to16Id,
+    normalized: {
+      hora_entrada: '09:00:00',
+      hora_salida: '18:00:00',
+      descripcion: 'Administrativo',
+    },
+    activeCertId: sharedCertId,
+    certificates: [baseCert45001],
+    shiftCatalog,
+  });
+  assert.equal(editSchedulePlan.valid, true);
+  assert.equal(editSchedulePlan.action, 'update_schedule');
+
+  // 7. Custom description resolution & generic detection
+  assert.equal(isGenericTurnoDescription('Turno 08:00 – 17:00', '08:00:00', '17:00:00'), true);
+  assert.equal(isGenericTurnoDescription('Turno Operativo 3'), true);
+  assert.equal(isGenericTurnoDescription('Administrativo', '08:00:00', '17:00:00'), false);
+
+  const customMap = {
+    [`${sharedCertId}::${shift8to17Id}`]: 'Administrativo',
+    [`turno::${shift8to17Id}`]: 'Turno General',
+  };
+  assert.equal(
+    resolveCustomTurnoDescription({
+      turnoId: shift8to17Id,
+      certId: sharedCertId,
+      hora_entrada: '08:00:00',
+      hora_salida: '17:00:00',
+      currentDescripcion: 'Turno 08:00 – 17:00',
+      shiftCatalog,
+      customMap,
+    }),
+    'Administrativo'
+  );
+  // saveCustomTurnoDescription executes safely in Node (without localStorage)
+  const savedMap = saveCustomTurnoDescription({
+    turnoId: shift8to17Id,
+    certId: sharedCertId,
+    descripcion: 'Administrativo',
+  });
+  assert.equal(savedMap[`${sharedCertId}::${shift8to17Id}`], 'Administrativo');
+
+  // 8. Edit 08:00 - 17:00 -> 08:30 - 17:30 when another org uses 08:00 - 17:00 -> fork_new_and_relink
+  const otherOrgCert: typeof INITIAL_CERTIFICADOS_DETAILED[number] = {
+    ...INITIAL_CERTIFICADOS_DETAILED[0],
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    numero_certificado: 'FN-QMS-OTHER',
+    sitios: [],
+    turnos: [
+      {
+        id: shift8to17Id,
+        hora_entrada: '08:00:00',
+        hora_salida: '17:00:00',
+        descripcion: 'Diurno Otra Org',
+        sitios_vinculados: ['Sede Otra'],
+      },
+    ],
+  };
+  const cert45001With8to17: typeof INITIAL_CERTIFICADOS_DETAILED[number] = {
+    ...baseCert45001,
+    sitios: [
+      {
+        ...baseCert45001.sitios[0],
+        turnos_por_sitio: [
+          {
+            id: 'tps-8-17',
+            id_sitio: sharedSiteId,
+            id_turno: shift8to17Id,
+            hora_entrada: '08:00:00',
+            hora_salida: '17:00:00',
+            descripcion: 'Administrativo',
+            deleted_at: null,
+          },
+        ],
+      },
+    ],
+    turnos: [
+      {
+        id: shift8to17Id,
+        hora_entrada: '08:00:00',
+        hora_salida: '17:00:00',
+        descripcion: 'Administrativo',
+        sitios_vinculados: ['Planta CADIPRO'],
+      },
+    ],
+  };
+  const forkPlan = resolveTurnoUpsertPlan({
+    mode: 'edit',
+    currentTurnoId: shift8to17Id,
+    normalized: {
+      hora_entrada: '08:30:00',
+      hora_salida: '17:30:00',
+      descripcion: 'Administrativo Ajustado',
+    },
+    activeCertId: sharedCertId,
+    originatingSitioId: sharedSiteId,
+    certificates: [otherOrgCert, cert45001With8to17],
+    shiftCatalog,
+  });
+  assert.equal(forkPlan.valid, true);
+  assert.equal(forkPlan.action, 'fork_new_and_relink');
+  assert.equal(forkPlan.needsTurnoInsert, true);
+  assert.equal(forkPlan.needsShareLink, true);
+
+  // 9. resolveTurnoDetailById prioritizes activeCertId when originatingSitioId is shared across certs
+  const cert14001WithSharedSite: typeof INITIAL_CERTIFICADOS_DETAILED[number] = {
+    ...cert45001With8to17,
+    id: '7b958a33-e557-44b6-b31e-17d74b506aba',
+    numero_certificado: '14001-85-03-10-2020',
+    norma_codigo: 'ISO 14001:2015',
+  };
+  const detailFrom45001 = resolveTurnoDetailById({
+    turnoId: shift8to17Id,
+    originatingSitioId: sharedSiteId,
+    activeCertId: sharedCertId,
+    certificates: [cert14001WithSharedSite, cert45001With8to17],
+    programacionAudits: [],
+    shiftCatalog,
+  });
+  assert.ok(detailFrom45001);
+  assert.equal(detailFrom45001.parentSitio?.id_certificado, sharedCertId);
+  assert.equal(detailFrom45001.parentSitio?.numero_certificado, '45001-41-03-10-2020');
+});
+
+
 
 

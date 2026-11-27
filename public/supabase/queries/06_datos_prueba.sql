@@ -5611,6 +5611,15 @@ ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
     delete_reason = NULL,
     updated_at = NOW();
 
+INSERT INTO public.alcance_certificado_compartido (id, id_alcance, id_certificado) VALUES
+    ('340e351e-5edb-4b51-ab6d-01437afb32a9', '0e0dde35-a862-4f42-a509-efa0b1b615f0', '7b958a33-e557-44b6-b31e-17d74b506aba'),
+    ('a9bef3bd-a9a0-4c50-942d-a5ac9835bc7a', '0e0dde35-a862-4f42-a509-efa0b1b615f0', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b')
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_alcance = EXCLUDED.id_alcance,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
 INSERT INTO public.sitio (id, id_certificado, id_certificado_version, numero_sitio, nombre_sitio, direccion_sitio, personal_count) VALUES
     ('6efe5ad5-81a8-4a06-8107-1b7b65712ca7', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 0, 'Planta CADIPRO', 'Km. 1, Vía La Morita, San Rafael del Piñal, Municipio Fernández Feo, Edo. Táchira, Código Postal: 5032, Venezuela.', 102)
 ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL DO UPDATE SET
@@ -5622,8 +5631,28 @@ ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL DO U
     delete_reason = NULL,
     updated_at = NOW();
 
+INSERT INTO public.sitio_certificado_compartido (id, id_sitio, id_certificado, id_certificado_version, numero_sitio) VALUES
+    ('0d5d541e-48cc-4d9a-a6e2-a34fe31c90e4', '6efe5ad5-81a8-4a06-8107-1b7b65712ca7', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1', 0),
+    ('808731ec-951b-4dce-8234-74c18df3bb04', '6efe5ad5-81a8-4a06-8107-1b7b65712ca7', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 0)
+ON CONFLICT (id_sitio, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
+    numero_sitio = EXCLUDED.numero_sitio,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
 INSERT INTO public.fecha_certificado (id, id_certificado, id_certificado_version, fecha, tipo_fecha) VALUES
-    ('be804394-ed26-4ea7-99f3-798f4f73c498', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2020-10-30', 'Otorgamiento')
+    ('be804394-ed26-4ea7-99f3-798f4f73c498', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2020-10-30', 'Otorgamiento'),
+    ('a0aa6eec-d6da-4b27-b9a8-e43f6d22a529', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2023-10-30', 'Renovación'),
+    ('66da15fc-b450-4df9-b2f3-0b265f38880a', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2026-10-29', 'Vencimiento'),
+    ('e11d23a2-2bd0-4e52-a722-ffce9ac3fbdd', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2026-03-27', 'Modificación'),
+    ('04b9839a-0909-489b-aed7-c203af93ded7', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1', '2020-10-30', 'Otorgamiento'),
+    ('62628bfa-dd20-4a1c-bf70-b9ffb3b4e69c', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1', '2023-10-30', 'Renovación'),
+    ('c2f326e7-3e73-4297-8dc6-bdfeea56ada2', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1', '2026-10-29', 'Vencimiento'),
+    ('c4416b44-4d8b-488d-bce6-37f45c7e22e9', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1', '2026-03-27', 'Modificación'),
+    ('b94fc397-5abb-4ebd-b5e0-d8c81396611d', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', '2020-10-30', 'Otorgamiento'),
+    ('b6e1b28f-3ab0-4290-9968-dd6904d23e24', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', '2023-10-30', 'Renovación'),
+    ('846bcbac-3754-47e6-990d-41db3fbca127', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', '2026-10-29', 'Vencimiento'),
+    ('e8bcad93-79a8-4b7f-82f5-c85ab16480ad', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', '2026-03-27', 'Modificación')
 ON CONFLICT (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
     deleted_at = NULL,
     deleted_by = NULL,
@@ -5631,11 +5660,79 @@ ON CONFLICT (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL
     updated_at = NOW();
 
 INSERT INTO public.contacto_certificado (id, id_certificado, id_certificado_version, nombre, cargo) VALUES
-    ('df04e489-a83d-4262-b0dc-e82fdb8e9b24', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 'Elena Torres', 'Jefe Cumplimiento de Calidad')
+    ('df04e489-a83d-4262-b0dc-e82fdb8e9b24', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 'Elena Torres', 'Jefe Cumplimiento de Calidad'),
+    ('d0a3f64c-fd63-43b7-ac1e-4d15b4c48566', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 'Luz Mora', 'Jefe de Calidad'),
+    ('8faf3cfc-4f78-4317-82a4-8b8b7d61b7ae', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 'Maria Vélez', 'Gerente')
 ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
     nombre = EXCLUDED.nombre,
     cargo = EXCLUDED.cargo,
     deleted_at = NULL,
     deleted_by = NULL,
     delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.telefono_contacto_certificado (id, id_contacto, telefono, tipo_telefono) VALUES
+    ('c9131535-b25d-406a-abb8-16b2bc67810c', 'df04e489-a83d-4262-b0dc-e82fdb8e9b24', '0424-5307237', 'Móvil'),
+    ('49921012-184e-482f-af8b-5e072373ce69', 'd0a3f64c-fd63-43b7-ac1e-4d15b4c48566', '0414-7375697', 'Móvil'),
+    ('17b3c6fe-91f1-4026-a9d9-a549c241baf4', '8faf3cfc-4f78-4317-82a4-8b8b7d61b7ae', '0424-1444289', 'Móvil')
+ON CONFLICT (id_contacto, TRIM(telefono)) WHERE deleted_at IS NULL DO UPDATE SET
+    tipo_telefono = EXCLUDED.tipo_telefono,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.email_contacto_certificado (id, id_contacto, email, tipo_email) VALUES
+    ('81cbdd0f-23b4-46a4-8ec7-a23ccfe740a7', 'df04e489-a83d-4262-b0dc-e82fdb8e9b24', 'elena.Torres@ve.nestle.com', 'Trabajo'),
+    ('96ffe550-95b9-468c-ab2e-0484efe6b237', 'd0a3f64c-fd63-43b7-ac1e-4d15b4c48566', 'luz.Mora@ve.nestle.com', 'Trabajo'),
+    ('72498212-5724-4e8a-81e2-c09846f41549', '8faf3cfc-4f78-4317-82a4-8b8b7d61b7ae', 'maria.veliz@ve.nestle.com', 'Trabajo')
+ON CONFLICT (id_contacto, LOWER(TRIM(email))) WHERE deleted_at IS NULL DO UPDATE SET
+    email = EXCLUDED.email,
+    tipo_email = EXCLUDED.tipo_email,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.contacto_certificado_compartido (id, id_contacto, id_certificado, id_certificado_version) VALUES
+    ('e8bf8b18-6106-4d4c-84f9-0b9d39ff5999', 'df04e489-a83d-4262-b0dc-e82fdb8e9b24', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1'),
+    ('8febd42c-71e3-4307-95c4-a97430f46c0a', 'df04e489-a83d-4262-b0dc-e82fdb8e9b24', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097'),
+    ('90c90b99-ac46-4859-bc6d-b5a4d8b67d81', 'd0a3f64c-fd63-43b7-ac1e-4d15b4c48566', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1'),
+    ('b0087e05-c6f8-41ef-8b3a-cf5650b3b266', 'd0a3f64c-fd63-43b7-ac1e-4d15b4c48566', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097'),
+    ('051ec085-3ddc-4a61-8676-4f3b68ea05ff', '8faf3cfc-4f78-4317-82a4-8b8b7d61b7ae', '7b958a33-e557-44b6-b31e-17d74b506aba', '9796af20-43f6-4ea6-80d9-c9da191dc4f1'),
+    ('1d711e76-84a0-42d6-8db7-b51dd09f95a5', '8faf3cfc-4f78-4317-82a4-8b8b7d61b7ae', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097')
+ON CONFLICT (id_contacto, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
+    deleted_at = NULL,
+    deleted_by = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.proceso (id, id_certificado, id_certificado_version, nombre_proceso, tipo) VALUES
+    ('277b91c1-13b4-40b2-8c87-aacda28a1cf9', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Calidad y SHE', 'Medular'),
+    ('2b78cc36-3a6d-4c60-a15f-cc7d5861b9d0', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Aseguramiento de la Calidad, SHE', 'Medular'),
+    ('3df50835-103e-42ac-94aa-5a2e00dc45a2', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Dirección', 'Estratégico'),
+    ('d07d97d6-52a4-4d0b-8134-e1ac22b9e30f', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Comunicación', 'De Apoyo'),
+    ('155653f1-6a58-433e-ae34-f717914b544a', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Recursos, Ingeniería técnica', 'De Apoyo'),
+    ('e6e080f2-b7bd-493d-959d-5c025b404b17', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Logística Física, Preservación y Despacho', 'Medular'),
+    ('ea8d2f87-3b50-42ff-8d25-5eb042a05fd4', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Finanzas y Control', 'Estratégico'),
+    ('25b185b5-9d30-4b9f-938e-51f28166c90d', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Laboratorios de Aseguramiento', 'Medular'),
+    ('6251ec94-fb7c-41f0-a1f7-82de11477809', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Servicio Médico Ocupacional', 'De Apoyo'),
+    ('c76aef9e-8d19-4c3a-93a6-9f7ad32ad0e6', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Recursos Humanos', 'De Apoyo')
+ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre_proceso))) WHERE deleted_at IS NULL DO UPDATE SET
+    nombre_proceso = EXCLUDED.nombre_proceso,
+    tipo = EXCLUDED.tipo,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.turnos_por_sitio (id, id_sitio, id_turno) VALUES
+    ('29d2e2ac-d3bd-4d98-9a05-ae4133829eaa', '6efe5ad5-81a8-4a06-8107-1b7b65712ca7', '70000000-0000-0000-0000-000000000004')
+ON CONFLICT (id_sitio, id_turno) WHERE deleted_at IS NULL DO UPDATE SET
+    deleted_at = NULL,
+    deleted_by = NULL;
+
+INSERT INTO public.turno_certificado_compartido (id, id_turno, id_certificado, id_certificado_version, id_certificado_origen) VALUES
+    ('2c88e8ec-85d1-4244-a64b-f2b170c10000', '70000000-0000-0000-0000-000000000004', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', '14c1c36d-636e-437e-97ba-08ad845908f1')
+ON CONFLICT (id_turno, id_certificado_version) WHERE deleted_at IS NULL DO UPDATE SET
+    id_certificado_origen = EXCLUDED.id_certificado_origen,
+    deleted_at = NULL,
+    deleted_by = NULL,
     updated_at = NOW();

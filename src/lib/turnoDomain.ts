@@ -386,7 +386,7 @@ export function resolveTurnoDetailById(params: {
   const sitios: TurnoSitioLink[] = [];
   const seenSitioIds = new Set<string>();
 
-  for (const cert of certificates) {
+  for (const cert of orderedCertificates) {
     const certHasShift = cert.turnos.some((t) => t.id === baseShift!.id);
     const certShiftEntry = cert.turnos.find((t) => t.id === baseShift!.id) || null;
 
@@ -430,7 +430,7 @@ export function resolveTurnoDetailById(params: {
   // Contextual parent Sitio ONLY when navigated from a specific Sitio
   let parentSitio: TurnoParentSitioContext | null = null;
   if (originatingSitioId && !archivedSiteIds?.has(originatingSitioId)) {
-    for (const cert of certificates) {
+    for (const cert of orderedCertificates) {
       const site = cert.sitios.find((s) => s.id === originatingSitioId);
       if (site) {
         parentSitio = {
@@ -1436,4 +1436,456 @@ export function buildTurnoOrgFacetCategories(
       : []),
   ];
 }
+
+// =============================================================================
+// Shift Catalog Reuse, Shared-Site Persistence & Custom Description Resolution
+// =============================================================================
+
+const CUSTOM_TURNO_DESC_STORAGE_KEY = 'fondonorma_custom_turno_descriptions_v1';
+
+export type CustomTurnoDescriptionMap = Record<string, string>;
+
+export function loadCustomTurnoDescriptions(): CustomTurnoDescriptionMap {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(CUSTOM_TURNO_DESC_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: CustomTurnoDescriptionMap = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string' && v.trim()) {
+        out[k] = v.trim();
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveCustomTurnoDescription(params: {
+  turnoId: string;
+  descripcion: string;
+  certId?: string | null;
+  saveGlobalFallback?: boolean;
+}): CustomTurnoDescriptionMap {
+  const cleanDesc = params.descripcion.trim();
+  const next = loadCustomTurnoDescriptions();
+  if (!params.turnoId || !cleanDesc) return next;
+
+  const certId = (params.certId || '').trim();
+  if (certId) {
+    next[`${certId}::${params.turnoId}`] = cleanDesc;
+  }
+  if (params.saveGlobalFallback !== false) {
+    next[`turno::${params.turnoId}`] = cleanDesc;
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CUSTOM_TURNO_DESC_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // Ignore storage quota or restricted iframe storage errors
+  }
+  return next;
+}
+
+export function isGenericTurnoDescription(
+  desc: string | null | undefined,
+  horaEntrada?: string | null,
+  horaSalida?: string | null
+): boolean {
+  const clean = (desc || '').trim();
+  if (!clean) return true;
+  if (/^Turno Operativo \d+$/i.test(clean)) return true;
+  if (horaEntrada && horaSalida) {
+    const range = `Turno ${formatTurnoTime(horaEntrada)} – ${formatTurnoTime(horaSalida)}`;
+    if (clean.toLowerCase() === range.toLowerCase()) return true;
+  }
+  return false;
+}
+
+export function resolveCustomTurnoDescription(params: {
+  turnoId: string;
+  certId?: string | null;
+  hora_entrada: string;
+  hora_salida: string;
+  currentDescripcion?: string | null;
+  shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
+  customMap?: CustomTurnoDescriptionMap;
+}): string {
+  const customMap = params.customMap ?? loadCustomTurnoDescriptions();
+  const certId = (params.certId || '').trim();
+  if (certId) {
+    const scoped = customMap[`${certId}::${params.turnoId}`];
+    if (scoped) return scoped;
+  }
+
+  const seedMatch = INITIAL_TURNO_CATALOG.find((t) => t.id === params.turnoId);
+  if (seedMatch?.descripcion) {
+    return seedMatch.descripcion;
+  }
+
+  const globalCustom = customMap[`turno::${params.turnoId}`];
+  if (globalCustom) return globalCustom;
+
+  if (
+    params.currentDescripcion &&
+    !isGenericTurnoDescription(params.currentDescripcion, params.hora_entrada, params.hora_salida)
+  ) {
+    return params.currentDescripcion.trim();
+  }
+
+  const catMatch = (params.shiftCatalog || []).find((t) => t.id === params.turnoId);
+  if (
+    catMatch?.descripcion &&
+    !isGenericTurnoDescription(catMatch.descripcion, params.hora_entrada, params.hora_salida)
+  ) {
+    return catMatch.descripcion.trim();
+  }
+
+  return `Turno ${formatTurnoTime(params.hora_entrada)} – ${formatTurnoTime(params.hora_salida)}`;
+}
+
+export type TurnoUpsertAction =
+  | 'create_new_and_link'
+  | 'reuse_and_link'
+  | 'update_schedule'
+  | 'update_metadata_only'
+  | 'relink_to_existing_catalog'
+  | 'fork_new_and_relink';
+
+export interface TurnoRelinkSiteTarget {
+  sitioId: string;
+  sitioNombre: string;
+  ownerCertId: string;
+  oldTpsIds: string[];
+}
+
+export interface TurnoUpsertPlan {
+  valid: boolean;
+  error?: string;
+  action?: TurnoUpsertAction;
+  targetTurnoId?: string;
+  oldTurnoId?: string;
+  matchedCatalogShift?: TurnoCatalogItem | null;
+  selectedSitioId?: string;
+  activeCertId?: string | null;
+  activeCertVersionId?: string | null;
+  siteOwnerCertId?: string | null;
+  needsTurnoInsert?: boolean;
+  needsTurnosPorSitioInsert?: boolean;
+  needsShareLink?: boolean;
+  relinkSites?: TurnoRelinkSiteTarget[];
+}
+
+export function resolveTurnoUpsertPlan(params: {
+  mode: 'create' | 'edit';
+  currentTurnoId?: string | null;
+  normalized: {
+    hora_entrada: string;
+    hora_salida: string;
+    descripcion: string;
+  };
+  selectedSitioId?: string | null;
+  activeCertId?: string | null;
+  originatingSitioId?: string | null;
+  certificates: ReadonlyArray<CertificadoDetailEntity>;
+  shiftCatalog: ReadonlyArray<TurnoCatalogItem>;
+  archivedSiteIds?: ReadonlySet<string>;
+  archivedTurnoIds?: ReadonlySet<string>;
+}): TurnoUpsertPlan {
+  const {
+    mode,
+    currentTurnoId = null,
+    normalized,
+    certificates,
+    shiftCatalog,
+    archivedSiteIds,
+    archivedTurnoIds,
+  } = params;
+
+  const selectedSitioId = (params.selectedSitioId || '').trim();
+  const activeCertId = (params.activeCertId || '').trim() || null;
+  const originatingSitioId = (params.originatingSitioId || '').trim() || null;
+  const targetStart = formatTurnoTime(normalized.hora_entrada);
+  const targetEnd = formatTurnoTime(normalized.hora_salida);
+  const labelRange = `${targetStart} – ${targetEnd}`;
+
+  const matchedCatalogShift =
+    shiftCatalog.find(
+      (t) =>
+        !archivedTurnoIds?.has(t.id) &&
+        formatTurnoTime(t.hora_entrada) === targetStart &&
+        formatTurnoTime(t.hora_salida) === targetEnd
+    ) || null;
+
+  const activeCert = activeCertId
+    ? certificates.find((c) => c.id === activeCertId) || null
+    : null;
+  const activeCertVersionId = activeCert
+    ? activeCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      activeCert.id_certificado_version ||
+      null
+    : null;
+
+  const findSiteContext = (sitioId: string) => {
+    if (!sitioId) return null;
+    if (activeCert) {
+      const inActive = activeCert.sitios.find(
+        (s) => s.id === sitioId && !archivedSiteIds?.has(s.id)
+      );
+      if (inActive) {
+        return {
+          site: inActive,
+          cert: activeCert,
+          ownerCertId: (inActive.ownerCertId || inActive.id_certificado || activeCert.id).trim(),
+        };
+      }
+    }
+    for (const c of certificates) {
+      const s = c.sitios.find((site) => site.id === sitioId && !archivedSiteIds?.has(site.id));
+      if (s) {
+        return {
+          site: s,
+          cert: c,
+          ownerCertId: (s.ownerCertId || s.id_certificado || c.id).trim(),
+        };
+      }
+    }
+    return null;
+  };
+
+  if (mode === 'create') {
+    const siteCtx = findSiteContext(selectedSitioId);
+    const siteOwnerCertId = siteCtx?.ownerCertId || activeCertId || null;
+    const effectiveCertId = activeCertId || siteCtx?.cert.id || null;
+    const effectiveCert = effectiveCertId
+      ? certificates.find((c) => c.id === effectiveCertId) || siteCtx?.cert || null
+      : null;
+    const effectiveCertVersionId = effectiveCert
+      ? effectiveCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        effectiveCert.id_certificado_version ||
+        null
+      : activeCertVersionId;
+
+    if (matchedCatalogShift) {
+      if (!selectedSitioId) {
+        return {
+          valid: false,
+          error: `Ya existe un turno activo con horario ${labelRange} en el catálogo general. Seleccione un sitio operativo para vincularlo.`,
+        };
+      }
+
+      const siteAlreadyHasTps = Boolean(
+        siteCtx?.site.turnos_por_sitio?.some(
+          (tps) => !tps.deleted_at && tps.id_turno === matchedCatalogShift.id
+        )
+      );
+      const certAlreadyHasShift = Boolean(
+        effectiveCert?.turnos.some((t) => t.id === matchedCatalogShift.id)
+      );
+      const isSharedSite = Boolean(
+        effectiveCertId && siteOwnerCertId && siteOwnerCertId !== effectiveCertId
+      );
+
+      // If the shift is already linked to this site AND visible on this certificate, reject duplicate
+      if (
+        (siteAlreadyHasTps && (!isSharedSite || certAlreadyHasShift)) ||
+        (certAlreadyHasShift &&
+          effectiveCert?.turnos
+            .find((t) => t.id === matchedCatalogShift.id)
+            ?.sitios_vinculados.some(
+              (name) =>
+                name.trim().toLowerCase() ===
+                (siteCtx?.site.nombre_sitio || '').trim().toLowerCase()
+            ))
+      ) {
+        return {
+          valid: false,
+          error: `El sitio seleccionado ya tiene asignado el turno activo ${labelRange} en este certificado.`,
+        };
+      }
+
+      return {
+        valid: true,
+        action: 'reuse_and_link',
+        targetTurnoId: matchedCatalogShift.id,
+        matchedCatalogShift,
+        selectedSitioId,
+        activeCertId: effectiveCertId,
+        activeCertVersionId: effectiveCertVersionId,
+        siteOwnerCertId,
+        needsTurnoInsert: false,
+        needsTurnosPorSitioInsert: !siteAlreadyHasTps,
+        needsShareLink: isSharedSite && !certAlreadyHasShift,
+      };
+    }
+
+    const isSharedSite = Boolean(
+      selectedSitioId && effectiveCertId && siteOwnerCertId && siteOwnerCertId !== effectiveCertId
+    );
+    return {
+      valid: true,
+      action: 'create_new_and_link',
+      matchedCatalogShift: null,
+      selectedSitioId,
+      activeCertId: effectiveCertId,
+      activeCertVersionId: effectiveCertVersionId,
+      siteOwnerCertId,
+      needsTurnoInsert: true,
+      needsTurnosPorSitioInsert: Boolean(selectedSitioId),
+      needsShareLink: isSharedSite,
+    };
+  }
+
+  // Edit mode
+  if (!currentTurnoId) {
+    return {
+      valid: false,
+      error: 'No se identificó el turno a editar.',
+    };
+  }
+
+  const collectRelinkSitesForCurrentTurno = (): TurnoRelinkSiteTarget[] => {
+    const sites: TurnoRelinkSiteTarget[] = [];
+    const seen = new Set<string>();
+    const scopeList = activeCert ? [activeCert] : certificates;
+    for (const cert of scopeList) {
+      for (const site of cert.sitios) {
+        if (archivedSiteIds?.has(site.id)) continue;
+        if (originatingSitioId && site.id !== originatingSitioId) continue;
+        if (seen.has(site.id)) continue;
+
+        const matchingTps = (site.turnos_por_sitio || []).filter(
+          (tps) => !tps.deleted_at && tps.id_turno === currentTurnoId
+        );
+        const hasShiftOnCert = cert.turnos.some(
+          (t) =>
+            t.id === currentTurnoId &&
+            t.sitios_vinculados.some(
+              (name) => name.trim().toLowerCase() === site.nombre_sitio.trim().toLowerCase()
+            )
+        );
+        if (matchingTps.length > 0 || hasShiftOnCert) {
+          seen.add(site.id);
+          sites.push({
+            sitioId: site.id,
+            sitioNombre: site.nombre_sitio,
+            ownerCertId: (site.ownerCertId || site.id_certificado || cert.id).trim(),
+            oldTpsIds: matchingTps.map((t) => t.id).filter(Boolean),
+          });
+        }
+      }
+    }
+    return sites;
+  };
+
+  if (!matchedCatalogShift) {
+    const contextRelinkSites = collectRelinkSitesForCurrentTurno();
+    const contextSiteIds = new Set(contextRelinkSites.map((s) => s.sitioId));
+    const usedElsewhere = certificates.some((cert) => {
+      if (activeCertId && cert.id === activeCertId) return false;
+      const hasCertShift = cert.turnos.some((t) => t.id === currentTurnoId);
+      const hasOtherSiteTps = cert.sitios.some(
+        (site) =>
+          !archivedSiteIds?.has(site.id) &&
+          !contextSiteIds.has(site.id) &&
+          (site.turnos_por_sitio || []).some(
+            (tps) => !tps.deleted_at && tps.id_turno === currentTurnoId
+          )
+      );
+      if (hasOtherSiteTps) return true;
+      if (hasCertShift && activeCertId && cert.id !== activeCertId) {
+        return true;
+      }
+      return false;
+    });
+
+    if (usedElsewhere && contextRelinkSites.length > 0) {
+      const firstOwnerCertId = contextRelinkSites[0]?.ownerCertId || activeCertId;
+      const needsShareLink = Boolean(
+        activeCertId &&
+          contextRelinkSites.some((s) => s.ownerCertId && s.ownerCertId !== activeCertId)
+      );
+      return {
+        valid: true,
+        action: 'fork_new_and_relink',
+        oldTurnoId: currentTurnoId,
+        matchedCatalogShift: null,
+        activeCertId,
+        activeCertVersionId,
+        siteOwnerCertId: firstOwnerCertId,
+        needsTurnoInsert: true,
+        needsShareLink,
+        relinkSites: contextRelinkSites,
+      };
+    }
+
+    return {
+      valid: true,
+      action: 'update_schedule',
+      targetTurnoId: currentTurnoId,
+      oldTurnoId: currentTurnoId,
+      matchedCatalogShift: null,
+      activeCertId,
+      activeCertVersionId,
+    };
+  }
+
+  if (matchedCatalogShift.id === currentTurnoId) {
+    return {
+      valid: true,
+      action: 'update_metadata_only',
+      targetTurnoId: currentTurnoId,
+      oldTurnoId: currentTurnoId,
+      matchedCatalogShift,
+      activeCertId,
+      activeCertVersionId,
+    };
+  }
+
+  // Target schedule already exists in catalog under a different ID (`matchedCatalogShift.id !== currentTurnoId`)
+  const targetShiftOnActiveCert = Boolean(
+    activeCert?.turnos.some((t) => t.id === matchedCatalogShift.id)
+  );
+  if (targetShiftOnActiveCert) {
+    return {
+      valid: false,
+      error: `Este certificado ya cuenta con un turno activo en el horario ${labelRange}.`,
+    };
+  }
+
+  // Collect sites in context currently linked to `currentTurnoId` so we can re-link them to `matchedCatalogShift.id`
+  const relinkSites = collectRelinkSitesForCurrentTurno();
+
+  if (relinkSites.length === 0) {
+    return {
+      valid: false,
+      error: `Ya existe otro turno activo en el catálogo con horario ${labelRange}.`,
+    };
+  }
+
+  const firstOwnerCertId = relinkSites[0]?.ownerCertId || activeCertId;
+  const needsShareLink = Boolean(
+    activeCertId &&
+      relinkSites.some((s) => s.ownerCertId && s.ownerCertId !== activeCertId)
+  );
+
+  return {
+    valid: true,
+    action: 'relink_to_existing_catalog',
+    targetTurnoId: matchedCatalogShift.id,
+    oldTurnoId: currentTurnoId,
+    matchedCatalogShift,
+    activeCertId,
+    activeCertVersionId,
+    siteOwnerCertId: firstOwnerCertId,
+    needsShareLink,
+    relinkSites,
+  };
+}
+
 

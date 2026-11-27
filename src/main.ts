@@ -739,8 +739,12 @@ import {
   createEmptyTurnoFormDraft,
   createTurnoFormDraftFromEntity,
   formatTurnoTime,
+  loadCustomTurnoDescriptions,
+  resolveCustomTurnoDescription,
   resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
+  resolveTurnoUpsertPlan,
+  saveCustomTurnoDescription,
   validateTurnoFormDraft,
   validateTurnoInput,
   type BatchShiftAssignmentTarget,
@@ -19986,8 +19990,10 @@ function bindAuthenticatedEvents(): void {
     const shift = state.domainData.shiftCatalog.find((t) => t.id === turnoId);
     if (!shift) return;
 
+    const activeContextCertId = resolveActiveCertIdFromContext();
     const currentSitio = resolveSitioDetailById({
       sitioId,
+      activeCertId: activeContextCertId,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
@@ -19995,12 +20001,22 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentSitio) return;
 
+    const siteOwnerCertId = (currentSitio.ownerCertId || currentSitio.id_certificado || '').trim();
+    const targetCertId = (activeContextCertId || currentSitio.id_certificado || '').trim();
+    const isSharedSiteContext = Boolean(
+      targetCertId && siteOwnerCertId && siteOwnerCertId !== targetCertId
+    );
+    const affectedCertIds = new Set<string>(
+      [siteOwnerCertId, targetCertId].filter(Boolean)
+    );
+
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
-      if (c.id !== currentSitio.id_certificado) return c;
+      if (!affectedCertIds.has(c.id)) return c;
       const activeVerId =
         c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
         c.id_certificado_version ||
         '';
+      const isReceivingCert = Boolean(siteOwnerCertId && c.id !== siteOwnerCertId);
 
       const updatedSites = c.sitios.map((s) => {
         if (s.id !== sitioId) return s;
@@ -20008,9 +20024,25 @@ function bindAuthenticatedEvents(): void {
         const nextLabels = existingLabels.includes(shift.descripcion)
           ? existingLabels
           : [...existingLabels, shift.descripcion];
+        const existingTps = s.turnos_por_sitio || [];
+        const hasTps = existingTps.some((t) => !t.deleted_at && t.id_turno === shift.id);
         return {
           ...s,
           turnos_vinculados: nextLabels,
+          turnos_por_sitio: hasTps
+            ? existingTps
+            : [
+                ...existingTps,
+                {
+                  id: `tps-${sitioId}-${shift.id}`,
+                  id_sitio: sitioId,
+                  id_turno: shift.id,
+                  hora_entrada: shift.hora_entrada,
+                  hora_salida: shift.hora_salida,
+                  descripcion: shift.descripcion,
+                  deleted_at: null,
+                },
+              ],
         };
       });
 
@@ -20032,6 +20064,8 @@ function bindAuthenticatedEvents(): void {
               hora_salida: shift.hora_salida,
               descripcion: shift.descripcion,
               sitios_vinculados: [currentSitio.nombre_sitio],
+              ownerCertId: siteOwnerCertId || c.id,
+              sharedFromCertId: isReceivingCert ? siteOwnerCertId : null,
             },
           ];
 
@@ -20057,10 +20091,64 @@ function bindAuthenticatedEvents(): void {
     if (STRICT_UUID_PATTERN.test(sitioId) && STRICT_UUID_PATTERN.test(shift.id)) {
       void (async () => {
         try {
-          await supabase.from('turnos_por_sitio').insert({
-            id_sitio: sitioId,
-            id_turno: shift.id,
-          });
+          const { data: existingTps } = await supabase
+            .from('turnos_por_sitio')
+            .select('id')
+            .eq('id_sitio', sitioId)
+            .eq('id_turno', shift.id)
+            .is('deleted_at', null)
+            .limit(1);
+          if (!Array.isArray(existingTps) || existingTps.length === 0) {
+            const { error: tpsErr } = await supabase.from('turnos_por_sitio').insert({
+              id_sitio: sitioId,
+              id_turno: shift.id,
+            });
+            if (tpsErr && !isMissingTableOrSchemaError(tpsErr)) {
+              const code = (tpsErr as { code?: string }).code;
+              if (code !== '23505') {
+                showFloatingToast(translateDatabaseError(tpsErr), 'warning');
+              }
+            }
+          }
+
+          if (
+            isSharedSiteContext &&
+            STRICT_UUID_PATTERN.test(targetCertId) &&
+            STRICT_UUID_PATTERN.test(siteOwnerCertId)
+          ) {
+            const targetCert = state.domainData.allCertificadosDetailed.find(
+              (c) => c.id === targetCertId
+            );
+            const targetVerId =
+              targetCert?.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+              targetCert?.id_certificado_version ||
+              '';
+            if (STRICT_UUID_PATTERN.test(targetVerId)) {
+              const { data: existingShare } = await supabase
+                .from('turno_certificado_compartido')
+                .select('id')
+                .eq('id_turno', shift.id)
+                .eq('id_certificado_version', targetVerId)
+                .is('deleted_at', null)
+                .limit(1);
+              if (!Array.isArray(existingShare) || existingShare.length === 0) {
+                const { error: shareErr } = await supabase
+                  .from('turno_certificado_compartido')
+                  .insert({
+                    id_turno: shift.id,
+                    id_certificado: targetCertId,
+                    id_certificado_version: targetVerId,
+                    id_certificado_origen: siteOwnerCertId,
+                  });
+                if (shareErr && !isMissingTableOrSchemaError(shareErr)) {
+                  const code = (shareErr as { code?: string }).code;
+                  if (code !== '23505') {
+                    showFloatingToast(translateDatabaseError(shareErr), 'warning');
+                  }
+                }
+              }
+            }
+          }
         } catch {
           // Optimistic reactive fallback preserved
         }
@@ -21901,9 +21989,13 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
+    const contextCertIdHint =
+      originatingCertId || state.certificadoDomain.selectedCertId || null;
+
     const resolvedTurno = resolveTurnoDetailById({
       turnoId,
       originatingSitioId,
+      activeCertId: contextCertIdHint,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
@@ -22120,6 +22212,7 @@ function bindAuthenticatedEvents(): void {
     const currentTurno = resolveTurnoDetailById({
       turnoId,
       originatingSitioId: state.turnoDomain.originatingSitioId,
+      activeCertId: resolveActiveCertIdFromContext() || state.turnoDomain.prefillCertId || null,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
@@ -22183,80 +22276,309 @@ function bindAuthenticatedEvents(): void {
     }
 
     const normTurno = validation.normalized;
-    const duplicateTurno = state.domainData.shiftCatalog.find(
-      (t) =>
-        !state.domainData.archivedTurnoIds.has(t.id) &&
-        t.id !== turnoId &&
-        formatTurnoTime(t.hora_entrada) === formatTurnoTime(normTurno.hora_entrada) &&
-        formatTurnoTime(t.hora_salida) === formatTurnoTime(normTurno.hora_salida)
-    );
-    if (duplicateTurno) {
-      state.turnoDomain.editErrorMessage = `Ya existe un turno activo con horario ${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}.`;
+    const contextCertId =
+      state.turnoDomain.prefillCertId ||
+      resolveActiveCertIdFromContext() ||
+      state.turnoDomain.editFormData?.sharedContext?.certId ||
+      null;
+
+    const upsertPlan = resolveTurnoUpsertPlan({
+      mode: isCreating ? 'create' : 'edit',
+      currentTurnoId: turnoId,
+      normalized: normTurno,
+      selectedSitioId: draft.id_sitio,
+      activeCertId: contextCertId,
+      originatingSitioId: state.turnoDomain.originatingSitioId,
+      certificates: state.domainData.allCertificadosDetailed,
+      shiftCatalog: state.domainData.shiftCatalog,
+      archivedSiteIds: state.domainData.archivedSiteIds,
+      archivedTurnoIds: state.domainData.archivedTurnoIds,
+    });
+
+    if (!upsertPlan.valid || !upsertPlan.action) {
+      state.turnoDomain.editErrorMessage =
+        upsertPlan.error || 'No se pudo validar la operación del turno.';
       render();
       return;
     }
 
-    if (isCreating) {
-      const newId = crypto.randomUUID();
+    const ensureActiveTurnosPorSitioLink = async (
+      sitioId: string,
+      targetTurnoId: string
+    ): Promise<{ tpsId: string | null; error: string | null }> => {
+      if (!STRICT_UUID_PATTERN.test(sitioId) || !STRICT_UUID_PATTERN.test(targetTurnoId)) {
+        return { tpsId: `tps-${sitioId}-${targetTurnoId}`, error: null };
+      }
       try {
-        const { error } = await supabase.from('turno').insert({
-          id: newId,
-          hora_entrada: normTurno.hora_entrada,
-          hora_salida: normTurno.hora_salida,
-        });
-        if (error && !isMissingTableOrSchemaError(error)) {
-          state.turnoDomain.editErrorMessage = translateDatabaseError(error);
-          render();
-          return;
+        const { data: existingRows, error: lookupErr } = await supabase
+          .from('turnos_por_sitio')
+          .select('id')
+          .eq('id_sitio', sitioId)
+          .eq('id_turno', targetTurnoId)
+          .is('deleted_at', null)
+          .limit(1);
+        if (lookupErr && !isMissingTableOrSchemaError(lookupErr)) {
+          return { tpsId: null, error: translateDatabaseError(lookupErr) };
         }
+        if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id) {
+          return { tpsId: String(existingRows[0].id), error: null };
+        }
+        const newTpsId = crypto.randomUUID();
+        const { data: inserted, error: insertErr } = await supabase
+          .from('turnos_por_sitio')
+          .insert({
+            id: newTpsId,
+            id_sitio: sitioId,
+            id_turno: targetTurnoId,
+          })
+          .select('id')
+          .single();
+        if (insertErr && !isMissingTableOrSchemaError(insertErr)) {
+          const code = (insertErr as { code?: string }).code;
+          if (code === '23505') {
+            const { data: retryRows } = await supabase
+              .from('turnos_por_sitio')
+              .select('id')
+              .eq('id_sitio', sitioId)
+              .eq('id_turno', targetTurnoId)
+              .is('deleted_at', null)
+              .limit(1);
+            if (Array.isArray(retryRows) && retryRows[0]?.id) {
+              return { tpsId: String(retryRows[0].id), error: null };
+            }
+          }
+          return { tpsId: null, error: translateDatabaseError(insertErr) };
+        }
+        return { tpsId: String((inserted as { id?: string } | null)?.id || newTpsId), error: null };
       } catch {
-        // Offline / local mode fallback preserved
+        return { tpsId: `tps-${sitioId}-${targetTurnoId}`, error: null };
+      }
+    };
+
+    const ensureActiveSharedTurnoLink = async (params: {
+      targetTurnoId: string;
+      targetCertId: string | null | undefined;
+      targetCertVersionId: string | null | undefined;
+      originCertId: string | null | undefined;
+    }): Promise<string | null> => {
+      const targetCertId = (params.targetCertId || '').trim();
+      const targetVerId = (params.targetCertVersionId || '').trim();
+      const originCertId = (params.originCertId || '').trim();
+      if (
+        !STRICT_UUID_PATTERN.test(params.targetTurnoId) ||
+        !STRICT_UUID_PATTERN.test(targetCertId) ||
+        !STRICT_UUID_PATTERN.test(targetVerId) ||
+        !STRICT_UUID_PATTERN.test(originCertId) ||
+        targetCertId === originCertId
+      ) {
+        return null;
+      }
+      try {
+        const { data: existingShare, error: lookupErr } = await supabase
+          .from('turno_certificado_compartido')
+          .select('id')
+          .eq('id_turno', params.targetTurnoId)
+          .eq('id_certificado_version', targetVerId)
+          .is('deleted_at', null)
+          .limit(1);
+        if (lookupErr && !isMissingTableOrSchemaError(lookupErr)) {
+          return translateDatabaseError(lookupErr);
+        }
+        if (Array.isArray(existingShare) && existingShare.length > 0) {
+          return null;
+        }
+        const { error: shareErr } = await supabase
+          .from('turno_certificado_compartido')
+          .insert({
+            id_turno: params.targetTurnoId,
+            id_certificado: targetCertId,
+            id_certificado_version: targetVerId,
+            id_certificado_origen: originCertId,
+          });
+        if (shareErr && !isMissingTableOrSchemaError(shareErr)) {
+          const code = (shareErr as { code?: string }).code;
+          if (code !== '23505') {
+            return translateDatabaseError(shareErr);
+          }
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    };
+
+    if (isCreating) {
+      let resolvedTurnoId = upsertPlan.targetTurnoId || crypto.randomUUID();
+      let resolvedExistingCatalogReuse = upsertPlan.action === 'reuse_and_link';
+
+      if (upsertPlan.needsTurnoInsert) {
+        try {
+          const { error } = await supabase.from('turno').insert({
+            id: resolvedTurnoId,
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+          });
+          if (error && !isMissingTableOrSchemaError(error)) {
+            const errCode = (error as { code?: string }).code;
+            if (errCode === '23505') {
+              // Concurrent/remote catalog entry exists with exact same schedule — look it up and reuse
+              const { data: existingTurnoRow } = await supabase
+                .from('turno')
+                .select('id')
+                .eq('hora_entrada', normTurno.hora_entrada)
+                .eq('hora_salida', normTurno.hora_salida)
+                .is('deleted_at', null)
+                .limit(1)
+                .maybeSingle();
+              if (existingTurnoRow?.id) {
+                resolvedTurnoId = String(existingTurnoRow.id);
+                resolvedExistingCatalogReuse = true;
+              } else {
+                state.turnoDomain.editErrorMessage = translateDatabaseError(error);
+                render();
+                return;
+              }
+            } else {
+              state.turnoDomain.editErrorMessage = translateDatabaseError(error);
+              render();
+              return;
+            }
+          }
+        } catch {
+          // Offline / local mode fallback preserved
+        }
       }
 
       const selectedSitioId = (draft.id_sitio || '').trim();
-      if (selectedSitioId && STRICT_UUID_PATTERN.test(selectedSitioId)) {
-        try {
-          await supabase.from('turnos_por_sitio').insert({
-            id_sitio: selectedSitioId,
-            id_turno: newId,
+      let createdTpsId = selectedSitioId ? `tps-${selectedSitioId}-${resolvedTurnoId}` : '';
+
+      if (selectedSitioId) {
+        const tpsRes = await ensureActiveTurnosPorSitioLink(selectedSitioId, resolvedTurnoId);
+        if (tpsRes.error) {
+          state.turnoDomain.editErrorMessage = tpsRes.error;
+          render();
+          return;
+        }
+        if (tpsRes.tpsId) {
+          createdTpsId = tpsRes.tpsId;
+        }
+
+        if (upsertPlan.needsShareLink) {
+          const shareErrMsg = await ensureActiveSharedTurnoLink({
+            targetTurnoId: resolvedTurnoId,
+            targetCertId: upsertPlan.activeCertId,
+            targetCertVersionId: upsertPlan.activeCertVersionId,
+            originCertId: upsertPlan.siteOwnerCertId,
           });
-        } catch {
-          // Reactive link preserved below
+          if (shareErrMsg) {
+            state.turnoDomain.editErrorMessage = shareErrMsg;
+            render();
+            return;
+          }
         }
       }
 
+      saveCustomTurnoDescription({
+        turnoId: resolvedTurnoId,
+        descripcion: normTurno.descripcion,
+        certId: upsertPlan.activeCertId || upsertPlan.siteOwnerCertId || null,
+        saveGlobalFallback: !resolvedExistingCatalogReuse,
+      });
+
+      const affectedCertIds = new Set<string>(
+        [upsertPlan.siteOwnerCertId || '', upsertPlan.activeCertId || ''].filter(Boolean)
+      );
       let linkedSitioName: string | null = null;
+
       if (selectedSitioId) {
         state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
           (cert) => {
             const targetSite = cert.sitios.find((s) => s.id === selectedSitioId);
             if (!targetSite) return cert;
+            if (affectedCertIds.size > 0 && !affectedCertIds.has(cert.id)) {
+              return cert;
+            }
+
             const activeVerId =
               cert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
               cert.id_certificado_version ||
               '';
+            const siteOwner = (
+              targetSite.ownerCertId ||
+              targetSite.id_certificado ||
+              upsertPlan.siteOwnerCertId ||
+              cert.id
+            ).trim();
+            const isReceivingCert = Boolean(siteOwner && cert.id !== siteOwner);
             linkedSitioName = targetSite.nombre_sitio;
-            const nextSitios = cert.sitios.map((s) =>
-              s.id === selectedSitioId
-                ? {
-                    ...s,
-                    turnos_vinculados: Array.from(
-                      new Set([...(s.turnos_vinculados || []), normTurno.descripcion])
-                    ),
-                  }
-                : s
-            );
-            const nextTurnos = [
-              ...cert.turnos,
-              {
-                id: newId,
-                ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
-                hora_entrada: normTurno.hora_entrada,
-                hora_salida: normTurno.hora_salida,
-                descripcion: normTurno.descripcion,
-                sitios_vinculados: [targetSite.nombre_sitio],
-              },
-            ];
+
+            const existingShiftDesc =
+              isReceivingCert || cert.id === upsertPlan.activeCertId
+                ? normTurno.descripcion
+                : resolveCustomTurnoDescription({
+                    turnoId: resolvedTurnoId,
+                    certId: cert.id,
+                    hora_entrada: normTurno.hora_entrada,
+                    hora_salida: normTurno.hora_salida,
+                    currentDescripcion: normTurno.descripcion,
+                    shiftCatalog: state.domainData.shiftCatalog,
+                  });
+
+            const nextSitios = cert.sitios.map((s) => {
+              if (s.id !== selectedSitioId) return s;
+              const existingTps = s.turnos_por_sitio || [];
+              const hasTps = existingTps.some(
+                (tps) => !tps.deleted_at && tps.id_turno === resolvedTurnoId
+              );
+              return {
+                ...s,
+                turnos_vinculados: Array.from(
+                  new Set([...(s.turnos_vinculados || []), existingShiftDesc])
+                ),
+                turnos_por_sitio: hasTps
+                  ? existingTps
+                  : [
+                      ...existingTps,
+                      {
+                        id: createdTpsId || `tps-${selectedSitioId}-${resolvedTurnoId}`,
+                        id_sitio: selectedSitioId,
+                        id_turno: resolvedTurnoId,
+                        hora_entrada: normTurno.hora_entrada,
+                        hora_salida: normTurno.hora_salida,
+                        descripcion: existingShiftDesc,
+                        deleted_at: null,
+                      },
+                    ],
+              };
+            });
+
+            const alreadyOnCert = cert.turnos.some((t) => t.id === resolvedTurnoId);
+            const nextTurnos = alreadyOnCert
+              ? cert.turnos.map((t) =>
+                  t.id === resolvedTurnoId
+                    ? {
+                        ...t,
+                        descripcion: existingShiftDesc,
+                        sitios_vinculados: Array.from(
+                          new Set([...t.sitios_vinculados, targetSite.nombre_sitio])
+                        ),
+                      }
+                    : t
+                )
+              : [
+                  ...cert.turnos,
+                  {
+                    id: resolvedTurnoId,
+                    ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
+                    hora_entrada: normTurno.hora_entrada,
+                    hora_salida: normTurno.hora_salida,
+                    descripcion: existingShiftDesc,
+                    sitios_vinculados: [targetSite.nombre_sitio],
+                    ownerCertId: siteOwner || cert.id,
+                    sharedFromCertId: isReceivingCert ? siteOwner : null,
+                  },
+                ];
+
             return syncActiveCertVersionSnapshot({
               ...cert,
               sitios: nextSitios,
@@ -22266,33 +22588,38 @@ function bindAuthenticatedEvents(): void {
         );
       }
 
-      const newShiftCatalogItem = {
-        id: newId,
-        hora_entrada: normTurno.hora_entrada,
-        hora_salida: normTurno.hora_salida,
-        descripcion: normTurno.descripcion,
-      };
-      state.domainData.shiftCatalog = [newShiftCatalogItem, ...state.domainData.shiftCatalog];
-      state.domainData.shifts = [
-        {
-          id: newId,
+      if (!state.domainData.shiftCatalog.some((t) => t.id === resolvedTurnoId)) {
+        const newShiftCatalogItem = {
+          id: resolvedTurnoId,
           hora_entrada: normTurno.hora_entrada,
           hora_salida: normTurno.hora_salida,
           descripcion: normTurno.descripcion,
-          sitios_vinculados: linkedSitioName ? [linkedSitioName] : [],
-        },
-        ...state.domainData.shifts,
-      ];
+        };
+        state.domainData.shiftCatalog = [newShiftCatalogItem, ...state.domainData.shiftCatalog];
+      }
+      if (!state.domainData.shifts.some((s) => s.id === resolvedTurnoId)) {
+        state.domainData.shifts = [
+          {
+            id: resolvedTurnoId,
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+            descripcion: normTurno.descripcion,
+            sitios_vinculados: linkedSitioName ? [linkedSitioName] : [],
+          },
+          ...state.domainData.shifts,
+        ];
+      }
 
       const labelRange = `${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}`;
       const nextSegment = {
-        id: `turno-${newId}`,
+        id: `turno-${resolvedTurnoId}`,
         label: `Turno ${labelRange}`,
         route: 'certificacion' as const,
         subview: 'certificates' as const,
         entityType: 'turno' as const,
-        entityId: newId,
+        entityId: resolvedTurnoId,
         originatingSitioId: selectedSitioId || null,
+        parentEntityId: upsertPlan.activeCertId || undefined,
         tab: 'sitios',
         tooltip: linkedSitioName
           ? `${linkedSitioName} > Turno ${labelRange} (${normTurno.descripcion})`
@@ -22302,24 +22629,29 @@ function bindAuthenticatedEvents(): void {
         ? state.breadcrumbs.map((seg) => (seg.id === 'turno-new' ? nextSegment : seg))
         : pushBreadcrumb(state.breadcrumbs, nextSegment);
 
-      recordPhase5SessionLog('turno', newId, 'INSERT', null, {
+      recordPhase5SessionLog('turno', resolvedTurnoId, resolvedExistingCatalogReuse ? 'UPDATE' : 'INSERT', null, {
         hora_entrada: normTurno.hora_entrada,
         hora_salida: normTurno.hora_salida,
         descripcion: normTurno.descripcion,
         ...(selectedSitioId ? { id_sitio: selectedSitioId } : {}),
       });
 
-      state.turnoDomain.selectedTurnoId = newId;
+      state.turnoDomain.selectedTurnoId = resolvedTurnoId;
       state.turnoDomain.originatingSitioId = selectedSitioId || null;
       state.turnoDomain.activeChildTab = 'sitios';
       state.turnoDomain.isCreating = false;
       state.turnoDomain.isEditingAttributes = false;
-      state.turnoDomain.prefillCertId = null;
+      state.turnoDomain.prefillCertId = upsertPlan.activeCertId || null;
       state.turnoDomain.prefillSitioId = null;
       state.turnoDomain.formDraft = undefined;
       state.turnoDomain.editFormData = undefined;
       state.turnoDomain.editErrorMessage = null;
-      showFloatingToast('Turno operativo creado correctamente.', 'success');
+      showFloatingToast(
+        resolvedExistingCatalogReuse
+          ? 'Turno operativo vinculado al sitio correctamente.'
+          : 'Turno operativo creado correctamente.',
+        'success'
+      );
       syncUrlHash('certificacion', 'certificates');
       render();
       return;
@@ -22328,6 +22660,7 @@ function bindAuthenticatedEvents(): void {
     const currentTurno = resolveTurnoDetailById({
       turnoId: turnoId!,
       originatingSitioId: state.turnoDomain.originatingSitioId,
+      activeCertId: contextCertId,
       certificates: state.domainData.allCertificadosDetailed,
       programacionAudits: state.domainData.programacionAudits,
       shiftCatalog: state.domainData.shiftCatalog,
@@ -22336,7 +22669,340 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentTurno) return;
 
-    if (STRICT_UUID_PATTERN.test(turnoId!)) {
+    const oldSnapshot = {
+      hora_entrada: currentTurno.hora_entrada,
+      hora_salida: currentTurno.hora_salida,
+      descripcion: currentTurno.descripcion,
+    };
+
+    if (
+      (upsertPlan.action === 'relink_to_existing_catalog' && upsertPlan.targetTurnoId) ||
+      upsertPlan.action === 'fork_new_and_relink'
+    ) {
+      let targetTurnoId = upsertPlan.targetTurnoId || crypto.randomUUID();
+      if (upsertPlan.action === 'fork_new_and_relink') {
+        try {
+          const { error: forkInsertErr } = await supabase.from('turno').insert({
+            id: targetTurnoId,
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+          });
+          if (forkInsertErr && !isMissingTableOrSchemaError(forkInsertErr)) {
+            const errCode = (forkInsertErr as { code?: string }).code;
+            if (errCode === '23505') {
+              const { data: existingTurnoRow } = await supabase
+                .from('turno')
+                .select('id')
+                .eq('hora_entrada', normTurno.hora_entrada)
+                .eq('hora_salida', normTurno.hora_salida)
+                .is('deleted_at', null)
+                .limit(1)
+                .maybeSingle();
+              if (existingTurnoRow?.id) {
+                targetTurnoId = String(existingTurnoRow.id);
+              } else {
+                state.turnoDomain.editErrorMessage = translateDatabaseError(forkInsertErr);
+                render();
+                return;
+              }
+            } else {
+              state.turnoDomain.editErrorMessage = translateDatabaseError(forkInsertErr);
+              render();
+              return;
+            }
+          }
+        } catch {
+          // Offline fallback preserved
+        }
+      }
+      const oldTurnoId = turnoId!;
+      const relinkSites = upsertPlan.relinkSites || [];
+      const newTpsIdBySitio = new Map<string, string>();
+
+      for (const relinkSite of relinkSites) {
+        const tpsRes = await ensureActiveTurnosPorSitioLink(relinkSite.sitioId, targetTurnoId);
+        if (tpsRes.error) {
+          state.turnoDomain.editErrorMessage = tpsRes.error;
+          render();
+          return;
+        }
+        if (tpsRes.tpsId) {
+          newTpsIdBySitio.set(relinkSite.sitioId, tpsRes.tpsId);
+        }
+
+        if (
+          upsertPlan.activeCertId &&
+          relinkSite.ownerCertId &&
+          relinkSite.ownerCertId !== upsertPlan.activeCertId
+        ) {
+          const shareErrMsg = await ensureActiveSharedTurnoLink({
+            targetTurnoId,
+            targetCertId: upsertPlan.activeCertId,
+            targetCertVersionId: upsertPlan.activeCertVersionId,
+            originCertId: relinkSite.ownerCertId,
+          });
+          if (shareErrMsg) {
+            state.turnoDomain.editErrorMessage = shareErrMsg;
+            render();
+            return;
+          }
+        }
+
+        // Check if any OTHER certificate still needs `(relinkSite.sitioId, oldTurnoId)` before retiring old link
+        if (
+          STRICT_UUID_PATTERN.test(relinkSite.sitioId) &&
+          STRICT_UUID_PATTERN.test(oldTurnoId)
+        ) {
+          try {
+            const { data: otherShares } = await supabase
+              .from('turno_certificado_compartido')
+              .select('id, id_certificado')
+              .eq('id_turno', oldTurnoId)
+              .is('deleted_at', null);
+            const hasOtherCertShares =
+              Array.isArray(otherShares) &&
+              otherShares.some(
+                (r) => String((r as { id_certificado?: string }).id_certificado || '') !== (upsertPlan.activeCertId || '')
+              );
+
+            if (upsertPlan.activeCertId && STRICT_UUID_PATTERN.test(upsertPlan.activeCertId)) {
+              await supabase
+                .from('turno_certificado_compartido')
+                .update({
+                  deleted_at: new Date().toISOString(),
+                  ...(state.user?.id ? { deleted_by: state.user.id } : {}),
+                })
+                .eq('id_turno', oldTurnoId)
+                .eq('id_certificado', upsertPlan.activeCertId)
+                .is('deleted_at', null);
+            }
+
+            if (!hasOtherCertShares) {
+              const newTpsId = newTpsIdBySitio.get(relinkSite.sitioId) || '';
+              for (const oldTpsId of relinkSite.oldTpsIds) {
+                if (!STRICT_UUID_PATTERN.test(oldTpsId)) continue;
+                if (STRICT_UUID_PATTERN.test(newTpsId) && oldTpsId !== newTpsId) {
+                  await supabase
+                    .from('turnos_sitio_auditoria')
+                    .update({ id_turnos_por_sitio: newTpsId })
+                    .eq('id_turnos_por_sitio', oldTpsId)
+                    .is('deleted_at', null);
+                }
+                await supabase
+                  .from('turnos_por_sitio')
+                  .update({
+                    deleted_at: new Date().toISOString(),
+                    ...(state.user?.id ? { deleted_by: state.user.id } : {}),
+                  })
+                  .eq('id', oldTpsId)
+                  .is('deleted_at', null);
+              }
+            }
+          } catch {
+            // Preserve reactive state
+          }
+        }
+      }
+
+      // If oldTurnoId has zero remaining active links anywhere, soft-archive it cleanly
+      if (STRICT_UUID_PATTERN.test(oldTurnoId)) {
+        try {
+          const [{ data: remTps }, { data: remShare }] = await Promise.all([
+            supabase
+              .from('turnos_por_sitio')
+              .select('id')
+              .eq('id_turno', oldTurnoId)
+              .is('deleted_at', null)
+              .limit(1),
+            supabase
+              .from('turno_certificado_compartido')
+              .select('id')
+              .eq('id_turno', oldTurnoId)
+              .is('deleted_at', null)
+              .limit(1),
+          ]);
+          const hasRemainingLinks =
+            (Array.isArray(remTps) && remTps.length > 0) ||
+            (Array.isArray(remShare) && remShare.length > 0);
+          if (!hasRemainingLinks) {
+            await supabase
+              .from('turno')
+              .update({
+                deleted_at: new Date().toISOString(),
+                delete_reason: 'Reasignado a horario existente del catálogo',
+                ...(state.user?.id ? { deleted_by: state.user.id } : {}),
+              })
+              .eq('id', oldTurnoId)
+              .is('deleted_at', null);
+            state.domainData.archivedTurnoIds.add(oldTurnoId);
+            state.domainData.shiftCatalog = state.domainData.shiftCatalog.filter(
+              (t) => t.id !== oldTurnoId
+            );
+          }
+        } catch {
+          // Non-blocking cleanup
+        }
+      }
+
+      saveCustomTurnoDescription({
+        turnoId: targetTurnoId,
+        descripcion: normTurno.descripcion,
+        certId: upsertPlan.activeCertId || upsertPlan.siteOwnerCertId || null,
+        saveGlobalFallback: false,
+      });
+
+      const targetSitioIdSet = new Set(relinkSites.map((s) => s.sitioId));
+      const affectedCertIds = new Set<string>(
+        [
+          upsertPlan.activeCertId || '',
+          ...relinkSites.map((s) => s.ownerCertId),
+        ].filter(Boolean)
+      );
+
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+        if (!affectedCertIds.has(c.id)) return c;
+        const activeVerId =
+          c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+          c.id_certificado_version ||
+          '';
+        const updatedSitios = c.sitios.map((s) => {
+          if (!targetSitioIdSet.has(s.id)) return s;
+          const remainingTps = (s.turnos_por_sitio || []).filter(
+            (tps) => tps.id_turno !== oldTurnoId
+          );
+          const alreadyHasTarget = remainingTps.some(
+            (tps) => !tps.deleted_at && tps.id_turno === targetTurnoId
+          );
+          const nextTps = alreadyHasTarget
+            ? remainingTps
+            : [
+                ...remainingTps,
+                {
+                  id: newTpsIdBySitio.get(s.id) || `tps-${s.id}-${targetTurnoId}`,
+                  id_sitio: s.id,
+                  id_turno: targetTurnoId,
+                  hora_entrada: normTurno.hora_entrada,
+                  hora_salida: normTurno.hora_salida,
+                  descripcion: normTurno.descripcion,
+                  deleted_at: null,
+                },
+              ];
+          const filteredLabels = (s.turnos_vinculados || []).filter(
+            (lbl) => lbl.trim().toLowerCase() !== currentTurno.descripcion.trim().toLowerCase()
+          );
+          const nextLabels = filteredLabels.includes(normTurno.descripcion)
+            ? filteredLabels
+            : [...filteredLabels, normTurno.descripcion];
+          return {
+            ...s,
+            turnos_por_sitio: nextTps,
+            turnos_vinculados: nextLabels,
+          };
+        });
+
+        const siteNamesForRelink = relinkSites.map((rs) => rs.sitioNombre);
+        const filteredTurnos = c.turnos.filter((t) => t.id !== oldTurnoId);
+        const alreadyHasCertShift = filteredTurnos.some((t) => t.id === targetTurnoId);
+        const firstOwner = relinkSites[0]?.ownerCertId || c.id;
+        const isReceivingCert = Boolean(firstOwner && c.id !== firstOwner);
+        const nextTurnos = alreadyHasCertShift
+          ? filteredTurnos.map((t) =>
+              t.id === targetTurnoId
+                ? {
+                    ...t,
+                    descripcion:
+                      c.id === upsertPlan.activeCertId ? normTurno.descripcion : t.descripcion,
+                    sitios_vinculados: Array.from(
+                      new Set([...t.sitios_vinculados, ...siteNamesForRelink])
+                    ),
+                  }
+                : t
+            )
+          : [
+              ...filteredTurnos,
+              {
+                id: targetTurnoId,
+                ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
+                hora_entrada: normTurno.hora_entrada,
+                hora_salida: normTurno.hora_salida,
+                descripcion: normTurno.descripcion,
+                sitios_vinculados: siteNamesForRelink,
+                ownerCertId: firstOwner,
+                sharedFromCertId: isReceivingCert ? firstOwner : null,
+              },
+            ];
+
+        return syncActiveCertVersionSnapshot({
+          ...c,
+          sitios: updatedSitios,
+          turnos: nextTurnos,
+        });
+      });
+
+      const labelRange = `${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}`;
+      state.breadcrumbs = state.breadcrumbs.map((seg) =>
+        seg.entityType === 'turno' && seg.entityId === oldTurnoId
+          ? {
+              ...seg,
+              id: `turno-${targetTurnoId}`,
+              entityId: targetTurnoId,
+              label: `Turno ${labelRange}`,
+              tooltip: currentTurno.parentSitio
+                ? `Sitio ${currentTurno.parentSitio.numero_sitio} > Turno ${labelRange} (${normTurno.descripcion})`
+                : `Turno ${labelRange} (${normTurno.descripcion})`,
+            }
+          : seg
+      );
+
+      if (!state.domainData.shiftCatalog.some((t) => t.id === targetTurnoId)) {
+        state.domainData.shiftCatalog = [
+          {
+            id: targetTurnoId,
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+            descripcion: normTurno.descripcion,
+          },
+          ...state.domainData.shiftCatalog,
+        ];
+      }
+      if (!state.domainData.shifts.some((s) => s.id === targetTurnoId)) {
+        state.domainData.shifts = [
+          {
+            id: targetTurnoId,
+            hora_entrada: normTurno.hora_entrada,
+            hora_salida: normTurno.hora_salida,
+            descripcion: normTurno.descripcion,
+            sitios_vinculados: relinkSites.map((rs) => rs.sitioNombre),
+          },
+          ...state.domainData.shifts,
+        ];
+      }
+
+      recordPhase5SessionLog('turno', targetTurnoId, 'UPDATE', oldSnapshot, {
+        hora_entrada: normTurno.hora_entrada,
+        hora_salida: normTurno.hora_salida,
+        descripcion: normTurno.descripcion,
+        reemplazo_de: oldTurnoId,
+      });
+
+      state.turnoDomain.selectedTurnoId = targetTurnoId;
+      const restoredContext =
+        upsertPlan.activeCertId
+          ? buildTurnoSharedContextForCert(targetTurnoId, upsertPlan.activeCertId)
+          : undefined;
+      state.turnoDomain.isEditingAttributes = false;
+      state.turnoDomain.formDraft = undefined;
+      state.turnoDomain.editFormData = restoredContext
+        ? { sharedContext: restoredContext }
+        : undefined;
+      state.turnoDomain.editErrorMessage = null;
+      showFloatingToast('Horario del turno actualizado y vinculado correctamente.', 'success');
+      syncUrlHash('certificacion', 'certificates');
+      render();
+      return;
+    }
+
+    if (upsertPlan.action === 'update_schedule' && STRICT_UUID_PATTERN.test(turnoId!)) {
       try {
         const { error } = await supabase
           .from('turno')
@@ -22356,36 +23022,42 @@ function bindAuthenticatedEvents(): void {
       }
     }
 
-    const oldSnapshot = {
-      hora_entrada: currentTurno.hora_entrada,
-      hora_salida: currentTurno.hora_salida,
-      descripcion: currentTurno.descripcion,
-    };
+    const isSeededCatalogShift = INITIAL_TURNO_CATALOG.some((t) => t.id === turnoId!);
+    saveCustomTurnoDescription({
+      turnoId: turnoId!,
+      descripcion: normTurno.descripcion,
+      certId: contextCertId,
+      saveGlobalFallback: !isSeededCatalogShift,
+    });
 
-    state.domainData.shiftCatalog = state.domainData.shiftCatalog.map((t) =>
-      t.id === turnoId
-        ? {
-            ...t,
-            hora_entrada: normTurno.hora_entrada,
-            hora_salida: normTurno.hora_salida,
-            descripcion: normTurno.descripcion,
-          }
-        : t
-    );
+    if (!isSeededCatalogShift || !contextCertId) {
+      state.domainData.shiftCatalog = state.domainData.shiftCatalog.map((t) =>
+        t.id === turnoId
+          ? {
+              ...t,
+              hora_entrada: normTurno.hora_entrada,
+              hora_salida: normTurno.hora_salida,
+              descripcion: normTurno.descripcion,
+            }
+          : t
+      );
 
-    state.domainData.shifts = state.domainData.shifts.map((s) =>
-      s.id === turnoId
-        ? {
-            ...s,
-            hora_entrada: normTurno.hora_entrada,
-            hora_salida: normTurno.hora_salida,
-            descripcion: normTurno.descripcion,
-          }
-        : s
-    );
+      state.domainData.shifts = state.domainData.shifts.map((s) =>
+        s.id === turnoId
+          ? {
+              ...s,
+              hora_entrada: normTurno.hora_entrada,
+              hora_salida: normTurno.hora_salida,
+              descripcion: normTurno.descripcion,
+            }
+          : s
+      );
+    }
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
-      syncActiveCertVersionSnapshot({
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
+      const shouldUpdateDesc =
+        !isSeededCatalogShift || !contextCertId || c.id === contextCertId;
+      return syncActiveCertVersionSnapshot({
         ...c,
         turnos: c.turnos.map((t) =>
           t.id === turnoId
@@ -22393,20 +23065,32 @@ function bindAuthenticatedEvents(): void {
                 ...t,
                 hora_entrada: normTurno.hora_entrada,
                 hora_salida: normTurno.hora_salida,
-                descripcion: normTurno.descripcion,
+                descripcion: shouldUpdateDesc ? normTurno.descripcion : t.descripcion,
               }
             : t
         ),
         sitios: c.sitios.map((s) => ({
           ...s,
-          turnos_vinculados: (s.turnos_vinculados || []).map((lbl) =>
-            lbl.trim().toLowerCase() === currentTurno.descripcion.trim().toLowerCase()
-              ? normTurno.descripcion
-              : lbl
+          turnos_por_sitio: (s.turnos_por_sitio || []).map((tps) =>
+            tps.id_turno === turnoId
+              ? {
+                  ...tps,
+                  hora_entrada: normTurno.hora_entrada,
+                  hora_salida: normTurno.hora_salida,
+                  descripcion: shouldUpdateDesc ? normTurno.descripcion : tps.descripcion,
+                }
+              : tps
           ),
+          turnos_vinculados: shouldUpdateDesc
+            ? (s.turnos_vinculados || []).map((lbl) =>
+                lbl.trim().toLowerCase() === currentTurno.descripcion.trim().toLowerCase()
+                  ? normTurno.descripcion
+                  : lbl
+              )
+            : s.turnos_vinculados,
         })),
-      })
-    );
+      });
+    });
 
     const labelRange = `${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}`;
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
@@ -22428,8 +23112,8 @@ function bindAuthenticatedEvents(): void {
     });
 
     const restoredContext =
-      turnoId && state.turnoDomain.prefillCertId
-        ? buildTurnoSharedContextForCert(turnoId, state.turnoDomain.prefillCertId)
+      turnoId && contextCertId
+        ? buildTurnoSharedContextForCert(turnoId, contextCertId)
         : undefined;
     state.turnoDomain.isEditingAttributes = false;
     state.turnoDomain.formDraft = undefined;
@@ -36432,6 +37116,7 @@ async function loadLiveCertificates(): Promise<void> {
             }
           }
 
+          const customTurnoDescMap = loadCustomTurnoDescriptions();
           const seedTurnosById = new Map((seedMatch?.turnos || []).map((t) => [t.id, t]));
           const baseTurnos: ShiftEntity[] =
             turnosPorSitioRes.error && turnosCompartidosRes.error
@@ -36441,14 +37126,46 @@ async function loadLiveCertificates(): Promise<void> {
                 }))
               : (turnosByCert.get(certId) || []).map((dbTurno) => {
                   const seedTurno = seedTurnosById.get(dbTurno.id);
+                  const resolvedDesc = resolveCustomTurnoDescription({
+                    turnoId: dbTurno.id,
+                    certId,
+                    hora_entrada: dbTurno.hora_entrada,
+                    hora_salida: dbTurno.hora_salida,
+                    currentDescripcion: dbTurno.descripcion,
+                    shiftCatalog: state.domainData.shiftCatalog,
+                    customMap: customTurnoDescMap,
+                  });
                   return {
                     ...dbTurno,
+                    descripcion: resolvedDesc,
                     id_certificado_version: dbTurno.sharedFromCertId
                       ? turnoShareVersionByCertAndId.get(`${certId}::${dbTurno.id}`)
                       : dbTurno.id_certificado_version,
                     empleados_activos: seedTurno?.empleados_activos ?? dbTurno.empleados_activos,
                   };
                 });
+          const resolvedDescByTurnoId = new Map(baseTurnos.map((t) => [t.id, t.descripcion]));
+          for (const site of baseSitios) {
+            if (site.turnos_por_sitio) {
+              site.turnos_por_sitio = site.turnos_por_sitio.map((tps) => ({
+                ...tps,
+                descripcion:
+                  resolvedDescByTurnoId.get(tps.id_turno) ||
+                  resolveCustomTurnoDescription({
+                    turnoId: tps.id_turno,
+                    certId,
+                    hora_entrada: tps.hora_entrada,
+                    hora_salida: tps.hora_salida,
+                    currentDescripcion: tps.descripcion,
+                    shiftCatalog: state.domainData.shiftCatalog,
+                    customMap: customTurnoDescMap,
+                  }),
+              }));
+              site.turnos_vinculados = Array.from(
+                new Set(site.turnos_por_sitio.filter((t) => !t.deleted_at).map((t) => t.descripcion))
+              );
+            }
+          }
 
           const resolvedAlcanceDetalle: AlcanceCertificadoEntity | null =
             alcanceByCertId !== null
@@ -37162,23 +37879,41 @@ async function loadDomainData(): Promise<void> {
 
     // Process Shifts
     if (!shiftsRes.error && Array.isArray(shiftsRes.data) && shiftsRes.data.length > 0) {
-      state.domainData.shifts = shiftsRes.data.map((row: Record<string, unknown>, idx: number) => ({
-        id: String(row.id),
-        hora_entrada: String(row.hora_entrada),
-        hora_salida: String(row.hora_salida),
-        descripcion: idx === 0 ? 'Turno Matutino Operativo' : 'Turno Vespertino / Nocturno',
-        sitios_vinculados: ['Planta Valencia'],
-      }));
+      const customTurnoDescMap = loadCustomTurnoDescriptions();
+      state.domainData.shifts = shiftsRes.data.map((row: Record<string, unknown>) => {
+        const id = String(row.id);
+        const horaEntrada = String(row.hora_entrada);
+        const horaSalida = String(row.hora_salida);
+        return {
+          id,
+          hora_entrada: horaEntrada,
+          hora_salida: horaSalida,
+          descripcion: resolveCustomTurnoDescription({
+            turnoId: id,
+            hora_entrada: horaEntrada,
+            hora_salida: horaSalida,
+            shiftCatalog: state.domainData.shiftCatalog,
+            customMap: customTurnoDescMap,
+          }),
+          sitios_vinculados: ['Planta Valencia'],
+        };
+      });
       const liveShiftCatalog: TurnoCatalogItem[] = shiftsRes.data.map(
-        (row: Record<string, unknown>, idx: number) => {
-          const seedMatch = INITIAL_TURNO_CATALOG.find((t) => t.id === String(row.id));
+        (row: Record<string, unknown>) => {
+          const id = String(row.id);
+          const horaEntrada = String(row.hora_entrada);
+          const horaSalida = String(row.hora_salida);
           return {
-            id: String(row.id),
-            hora_entrada: String(row.hora_entrada),
-            hora_salida: String(row.hora_salida),
-            descripcion:
-              seedMatch?.descripcion ||
-              (idx === 0 ? 'Turno Matutino Operativo' : `Turno Operativo ${idx + 1}`),
+            id,
+            hora_entrada: horaEntrada,
+            hora_salida: horaSalida,
+            descripcion: resolveCustomTurnoDescription({
+              turnoId: id,
+              hora_entrada: horaEntrada,
+              hora_salida: horaSalida,
+              shiftCatalog: state.domainData.shiftCatalog,
+              customMap: customTurnoDescMap,
+            }),
           };
         }
       );
@@ -37187,6 +37922,42 @@ async function loadDomainData(): Promise<void> {
         ...liveShiftCatalog,
         ...INITIAL_TURNO_CATALOG.filter((t) => !liveIds.has(t.id)),
       ];
+      state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((cert) => {
+        if (!cert.turnos || cert.turnos.length === 0) return cert;
+        const resolvedMap = new Map<string, string>();
+        const nextTurnos = cert.turnos.map((t) => {
+          const nextDesc = resolveCustomTurnoDescription({
+            turnoId: t.id,
+            certId: cert.id,
+            hora_entrada: t.hora_entrada,
+            hora_salida: t.hora_salida,
+            currentDescripcion: t.descripcion,
+            shiftCatalog: state.domainData.shiftCatalog,
+            customMap: customTurnoDescMap,
+          });
+          resolvedMap.set(t.id, nextDesc);
+          return nextDesc !== t.descripcion ? { ...t, descripcion: nextDesc } : t;
+        });
+        const nextSitios = cert.sitios.map((s) => {
+          if (!s.turnos_por_sitio || s.turnos_por_sitio.length === 0) return s;
+          const nextTps = s.turnos_por_sitio.map((tps) => ({
+            ...tps,
+            descripcion: resolvedMap.get(tps.id_turno) || tps.descripcion,
+          }));
+          return {
+            ...s,
+            turnos_por_sitio: nextTps,
+            turnos_vinculados: Array.from(
+              new Set(nextTps.filter((tps) => !tps.deleted_at).map((tps) => tps.descripcion))
+            ),
+          };
+        });
+        return syncActiveCertVersionSnapshot({
+          ...cert,
+          turnos: nextTurnos,
+          sitios: nextSitios,
+        });
+      });
     }
 
     // Process Standards, Requirements & Bilingual Translations (paginated >1,000 rows + graceful offline/unmigrated fallback)
