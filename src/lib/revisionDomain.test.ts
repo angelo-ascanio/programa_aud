@@ -638,3 +638,71 @@ test('Step 4.1: Revision Multi View & Detail View render organizacion_abreviacio
   assert.match(detailHtml, /No Conformidades:/);
   assert.equal(assertZeroUuidExposure(detailHtml).compliant, true);
 });
+
+test('Step 4.4: 7. Revisión inherits unified Zone 1+2 shell, avoids Zone 3 header repetition, and keeps read-only labels 100% Spanish', () => {
+  const audit = makeAudit({
+    id: AUDIT_UUID_PENDING,
+    id_certificado: '40000000-0000-0000-0000-000000000001',
+    numero_certificado: 'FN-QMS-2025-101',
+    codigo_auditoria: 'AUD-2025-101',
+    organizacion_abreviacion: 'ANDINA',
+  });
+  const findings: Phase5FindingEntity[] = [
+    makeFinding({ id: 'f-open', id_auditoria: AUDIT_UUID_PENDING, tipo: 'NC_MENOR', cerrado: false, fecha_cierre: null }),
+  ];
+
+  const staffHtml = renderRevisionView({
+    profile: WORKER_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      selectedCertId: audit.id_certificado,
+      selectedAuditId: audit.id,
+    },
+    audits: [audit],
+    findings,
+    actorNameById: new Map(),
+  });
+  assert.match(staffHtml, />\s*7\. Revisión\s*</);
+  assert.match(staffHtml, /data-testid="audit-zone-1-data"/);
+  assert.match(staffHtml, /data-testid="audit-zone-2-selectors"/);
+
+  const stripMatch = staffHtml.match(/data-testid="revision-summary-strip"[\s\S]*?<\/section>/);
+  assert.ok(stripMatch, 'Expected revision-summary-strip section');
+  assert.match(stripMatch[0], /Tipo:/);
+  assert.match(stripMatch[0], /Fechas Reales:/);
+  assert.match(stripMatch[0], /No Conformidades:/);
+  assert.doesNotMatch(stripMatch[0], /FN-QMS-2025-101|AUD-2025-101|Industrias Andinas/);
+  assert.match(staffHtml, /id="revisionDateInput"/);
+  assert.match(staffHtml, /id="revisionCommentInput"/);
+  assert.match(staffHtml, /id="saveRevisionBtn"/);
+
+  const auditorHtml = renderRevisionView({
+    profile: AUDITOR_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      selectedCertId: audit.id_certificado,
+      selectedAuditId: audit.id,
+    },
+    audits: [audit],
+    findings,
+    actorNameById: new Map(),
+  });
+  assert.match(auditorHtml, /Solo Lectura · Auditor/);
+  assert.doesNotMatch(auditorHtml, /Solo Lectura · AUDITOR/);
+  assert.equal(assertZeroUuidExposure(auditorHtml).compliant, true);
+
+  const clientHtml = renderRevisionView({
+    profile: CLIENT_PROFILE,
+    state: {
+      ...DEFAULT_REVISION_STATE,
+      selectedCertId: audit.id_certificado,
+      selectedAuditId: audit.id,
+    },
+    audits: [audit],
+    findings,
+    actorNameById: new Map(),
+  });
+  assert.match(clientHtml, /Solo Lectura · Cliente/);
+  assert.doesNotMatch(clientHtml, /Solo Lectura · CLIENT/);
+  assert.equal(assertZeroUuidExposure(clientHtml).compliant, true);
+});

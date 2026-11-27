@@ -1173,4 +1173,45 @@ describe('Step 4.1 — Resultado Version Snapshot, ISO 4.3 Exclusions & Sin Alca
     assert.match(detailV1Html, /FN-QMS-2026-101 v1/);
     assert.equal(assertZeroUuidExposure(detailV1Html).compliant, true);
   });
+
+  it('Step 4.4: 6. Resultado inherits unified Zone 1+2 shell, renders 6. Resultado title, and keeps read-only Zone 3 100% Spanish', () => {
+    const audit = buildSampleAudit();
+    const finding = buildSampleFinding({ id_proceso: null });
+
+    const staffHtml = renderResultadoView({
+      profile: ADMIN_PROFILE,
+      state: {
+        ...BASE_RESULTADO_STATE,
+        selectedCertId: audit.id_certificado,
+        selectedResultAuditId: audit.id,
+      },
+      audits: [audit],
+      findings: [finding],
+      processes: SAMPLE_PROCESSES,
+      requirements: SAMPLE_REQUIREMENTS,
+    });
+    assert.match(staffHtml, />\s*6\. Resultado\s*</);
+    assert.match(staffHtml, /data-testid="audit-zone-1-data"/);
+    assert.match(staffHtml, /data-testid="audit-zone-2-selectors"/);
+    assert.match(staffHtml, /id="openNcOffsetsModalBtn"/);
+
+    for (const roProfile of [UNASSIGNED_AUDITOR_PROFILE, CLIENT_PROFILE]) {
+      const roHtml = renderResultadoView({
+        profile: roProfile,
+        state: {
+          ...BASE_RESULTADO_STATE,
+          selectedCertId: audit.id_certificado,
+          selectedResultAuditId: audit.id,
+        },
+        audits: [audit],
+        findings: [finding],
+        processes: SAMPLE_PROCESSES,
+        requirements: SAMPLE_REQUIREMENTS,
+      });
+      assert.match(roHtml, />\s*6\. Resultado\s*</);
+      assert.match(roHtml, /🔒 Solo lectura/);
+      assert.doesNotMatch(roHtml, /Solo lectura \(CLIENT\)|Solo lectura \(AUDITOR\)/);
+      assert.equal(assertZeroUuidExposure(roHtml).compliant, true);
+    }
+  });
 });

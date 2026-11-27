@@ -502,16 +502,16 @@ function renderRevisionDetailView(opts: {
         data-testid="revision-summary-strip"
         class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs"
       >
-        <span class="inline-flex items-center gap-1.5 min-w-0">
-          <span class="font-semibold text-slate-500">Tipo:</span>
+        <span class="inline-flex flex-wrap items-baseline gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500 whitespace-nowrap shrink-0">Tipo:</span>
           <strong class="font-bold text-slate-900">${escapeHtml(context.tipoAuditoria)}</strong>
         </span>
-        <span class="inline-flex items-center gap-1.5 min-w-0">
-          <span class="font-semibold text-slate-500">Fechas Reales:</span>
+        <span class="inline-flex flex-wrap items-baseline gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500 whitespace-nowrap shrink-0">Fechas Reales:</span>
           <strong class="font-mono font-semibold text-slate-800">${escapeHtml(context.realDatesSummary)}</strong>
         </span>
-        <span class="inline-flex items-center gap-1.5 min-w-0">
-          <span class="font-semibold text-slate-500">No Conformidades:</span>
+        <span class="inline-flex flex-wrap items-baseline gap-1.5 min-w-0">
+          <span class="font-semibold text-slate-500 whitespace-nowrap shrink-0">No Conformidades:</span>
           <strong class="font-semibold text-slate-800">${escapeHtml(context.ncsSummary)}</strong>
         </span>
       </section>
@@ -568,7 +568,13 @@ function renderRevisionDetailView(opts: {
         <section class="bg-white border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
           <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
             <span class="font-bold text-slate-900">Revisión QA</span>
-            <span class="text-[11px] font-semibold text-slate-500">Solo Lectura · ${escapeHtml(profile.role)}</span>
+            <span class="text-[11px] font-semibold text-slate-500">Solo Lectura · ${
+              profile.role === 'CLIENT'
+                ? 'Cliente'
+                : profile.role === 'AUDITOR'
+                ? 'Auditor'
+                : 'Consulta'
+            }</span>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -593,7 +599,7 @@ function renderRevisionDetailView(opts: {
   }
 
   return renderAuditSectionShell({
-    sectionTitle: 'Revisión',
+    sectionTitle: '7. Revisión',
     sectionSymbol: '🕵️',
     backSubview: 'revision',
     certInfo: {

@@ -833,7 +833,7 @@ function renderResultadoDetailView(opts: {
           ${
             canEditExecution
               ? `
-                <form id="resultadoAddRealDateForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="inline-flex items-center gap-1.5 shrink-0">
+                <form id="resultadoAddRealDateForm" data-audit-id="${escapeHtml(activeAudit.id)}" class="inline-flex flex-wrap items-center gap-1.5 shrink-0">
                   <input
                     type="date"
                     id="resultadoNewRealDate"
@@ -854,7 +854,7 @@ function renderResultadoDetailView(opts: {
                   </button>
                 </form>
               `
-              : `<span class="text-[11px] text-slate-400">Solo lectura (${escapeHtml(profile.role)})</span>`
+              : ''
           }
         </div>
       </section>
@@ -1035,7 +1035,7 @@ function renderResultadoDetailView(opts: {
                                 ${isSaving ? 'Guardando...' : 'Guardar fechas'}
                               </button>
                             `
-                            : `<span class="text-slate-400">Solo lectura</span>`
+                            : ''
                         }
                       </form>
                     </div>
@@ -1170,7 +1170,7 @@ function renderResultadoDetailView(opts: {
 
   return `
     ${renderAuditSectionShell({
-      sectionTitle: 'Resultado',
+      sectionTitle: '6. Resultado',
       sectionSymbol: '✅',
       backSubview: 'resultado',
       certInfo: {

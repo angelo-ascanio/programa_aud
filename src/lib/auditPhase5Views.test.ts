@@ -254,12 +254,17 @@ describe('Step 8.1 - Resultado por Certificado, Fechas Reales y NCs por Cláusul
       requirements: mockRequirements,
     });
 
+    assert.match(collapsedHtml, /data-testid="audit-section-shell"/);
+    assert.match(collapsedHtml, /data-testid="audit-zone-1-data"/);
+    assert.match(collapsedHtml, /data-testid="audit-zone-2-selectors"/);
+    assert.match(collapsedHtml, />\s*6\. Resultado\s*</);
     assert.match(collapsedHtml, /Fechas Reales Auditadas/);
     assert.match(collapsedHtml, /Hallazgos/);
     assert.match(collapsedHtml, /id="resultadoAddRealDateForm"/);
     assert.match(collapsedHtml, /id="openNewFindingFormBtn"/);
     assert.match(collapsedHtml, /\+ Hallazgo/);
     assert.doesNotMatch(collapsedHtml, /id="resultadoNewNcForm"/);
+    assert.match(collapsedHtml, /data-testid="resultado-nc-card"/);
 
     const openFormHtml = renderResultadoView({
       profile: mockProfile,
