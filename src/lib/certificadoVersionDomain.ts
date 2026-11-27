@@ -1838,3 +1838,140 @@ export function resolveCertVersionSnapshotForAudit(
   };
 }
 
+/**
+ * Synchronizes the active (or specified) `CertificadoVersionSnapshot` inside `cert.versiones`
+ * with top-level `CertificadoDetailEntity` child collections (`sitios`, `procesos`, `turnos`,
+ * `noAplicables`, `contactos`, `fechas`) and snapshot-scoped metadata, while leaving all
+ * other historical snapshots frozen and untouched.
+ */
+export function syncActiveCertVersionSnapshot(
+  cert: CertificadoDetailEntity,
+  targetVersionId?: string | null
+): CertificadoDetailEntity {
+  const rawVersions = cert.versiones;
+  if (!rawVersions || rawVersions.length === 0) {
+    return cert;
+  }
+
+  const activeVersions = rawVersions.filter((v) => !v.deleted_at);
+  if (activeVersions.length === 0) {
+    return cert;
+  }
+
+  const requestedVerId = (targetVersionId || '').trim();
+  const certActiveVerId = (cert.id_certificado_version || '').trim();
+  const targetSnap =
+    (requestedVerId
+      ? activeVersions.find((v) => v.id === requestedVerId)
+      : undefined) ??
+    activeVersions.find((v) => v.es_version_actual) ??
+    (certActiveVerId
+      ? activeVersions.find((v) => v.id === certActiveVerId)
+      : undefined) ??
+    activeVersions[0];
+
+  if (!targetSnap) {
+    return cert;
+  }
+
+  const snapId = targetSnap.id;
+  const isTargetActive =
+    Boolean(targetSnap.es_version_actual) || snapId === certActiveVerId;
+  const knownVersionIds = new Set(activeVersions.map((v) => v.id));
+
+  const scopeItems = <
+    T extends { id_certificado_version?: string; sharedFromCertId?: string | null },
+  >(
+    items: ReadonlyArray<T> | undefined
+  ): T[] =>
+    (items || []).filter((item) => {
+      if (!isNotSoftDeleted(item)) return false;
+      const itemVerId = (item.id_certificado_version || '').trim();
+      if (!itemVerId) {
+        return isTargetActive;
+      }
+      if (itemVerId === snapId) {
+        return true;
+      }
+      if (isTargetActive && item.sharedFromCertId && !knownVersionIds.has(itemVerId)) {
+        return true;
+      }
+      return false;
+    });
+
+  const scopedSitios = scopeItems(cert.sitios);
+  const scopedProcesos = scopeItems(cert.procesos);
+  const scopedNoAplicables = scopeItems(cert.noAplicables);
+  const scopedContactos = scopeItems(cert.contactos);
+  const scopedFechas = scopeItems(cert.fechas);
+
+  const versionSiteIds = new Set(scopedSitios.map((s) => s.id));
+  const versionSiteNames = new Set(
+    scopedSitios.map((s) => s.nombre_sitio.trim().toLowerCase())
+  );
+  const scopedTurnos = (cert.turnos || []).filter((turno) => {
+    if (!isNotSoftDeleted(turno)) return false;
+    const turnoVerId = (turno.id_certificado_version || '').trim();
+    if (turnoVerId) {
+      if (turnoVerId === snapId) return true;
+      if (isTargetActive && turno.sharedFromCertId && !knownVersionIds.has(turnoVerId)) {
+        return true;
+      }
+      return false;
+    }
+    if (
+      (turno.sitios_vinculados || []).some(
+        (ref) => versionSiteIds.has(ref) || versionSiteNames.has(ref.trim().toLowerCase())
+      )
+    ) {
+      return true;
+    }
+    return isTargetActive;
+  });
+
+  const nextVersions = rawVersions.map((v) => {
+    if (v.id !== snapId) return v;
+    return {
+      ...v,
+      id_organizacion_version:
+        cert.id_organizacion_version || v.id_organizacion_version,
+      organizacion_abreviacion:
+        cert.organizacion_abreviacion !== undefined
+          ? cert.organizacion_abreviacion
+          : v.organizacion_abreviacion,
+      id_estatus: cert.id_estatus || v.id_estatus,
+      estatus: cert.estatus || v.estatus,
+      id_sector_iaf: cert.id_sector_iaf || v.id_sector_iaf,
+      sector_iaf: cert.sector_iaf ?? v.sector_iaf,
+      sector_iaf_descripcion:
+        cert.sector_iaf_descripcion || v.sector_iaf_descripcion,
+      id_subsector_iaf: cert.id_subsector_iaf || v.id_subsector_iaf,
+      subsector_iaf_codigo:
+        cert.subsector_iaf_codigo !== undefined
+          ? cert.subsector_iaf_codigo
+          : v.subsector_iaf_codigo,
+      subsector_iaf_descripcion:
+        cert.subsector_iaf_descripcion !== undefined
+          ? cert.subsector_iaf_descripcion
+          : v.subsector_iaf_descripcion,
+      subsector_categoria_riesgo:
+        cert.subsector_categoria_riesgo !== undefined
+          ? cert.subsector_categoria_riesgo
+          : v.subsector_categoria_riesgo,
+      multisitio: cert.multisitio ?? v.multisitio,
+      sitios: scopedSitios,
+      procesos: scopedProcesos,
+      turnos: scopedTurnos,
+      noAplicables: scopedNoAplicables,
+      contactos: scopedContactos,
+      fechas: scopedFechas,
+      ...(isTargetActive && cert.cobertura ? { cobertura: cert.cobertura } : {}),
+    };
+  });
+
+  return {
+    ...cert,
+    versiones: nextVersions,
+  };
+}
+

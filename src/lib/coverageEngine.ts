@@ -13,6 +13,7 @@ import type {
   ProcessRequirementMapping,
 } from './multisiteSampling';
 import { orderNormaRequisitosHierarchically } from './normaFullReader';
+import { syncActiveCertVersionSnapshot } from './certificadoVersionDomain';
 
 export type ClauseCoverageState =
   | 'CUBIERTO'
@@ -963,11 +964,11 @@ export function applyNonApplicableSmartMutationToState<
       };
     });
 
-    return {
+    return syncActiveCertVersionSnapshot({
       ...cert,
       noAplicables: nextNoAplicables,
       procesos: nextCertProcesos,
-    };
+    });
   });
 
   const nextProcesses = processes.map((proc) => {

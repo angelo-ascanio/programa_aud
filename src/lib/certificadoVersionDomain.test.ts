@@ -9,6 +9,7 @@ import {
   cloneCertificateVersionInMemory,
   persistCloneCertificadoVersion,
   persistMigrateAuditsVersion,
+  syncActiveCertVersionSnapshot,
   translateCertificadoVersionDbError,
   validateAuditVersionResolutions,
   type AuditMigrationHallazgoRecord,
@@ -22,6 +23,12 @@ import {
   type AlcanceCertificadoEntity,
   type CertificadoDetailEntity,
 } from './multisiteSampling';
+import {
+  resolveContactoDetailById,
+  resolveFechaDetailById,
+} from './certificadoSubEntities';
+import { resolveSitioDetailById } from './sitioDomain';
+import { resolveProjectedCertVersionContext } from '../views/certificadoView';
 import { containsRawUuid } from './zeroUuid';
 
 const REF_DATE = '2026-06-01';
@@ -643,4 +650,252 @@ test('persistMigrateAuditsVersion calls fn_migrar_auditorias_version_certificado
   });
   assert.equal(containsRawUuid(uuidLeakedErr), false);
   assert.ok(uuidLeakedErr.includes('referencia interna'));
+});
+
+// =============================================================================
+// 6. Active Version Snapshot Sync Regression Tests
+// =============================================================================
+
+test('syncActiveCertVersionSnapshot keeps active version snapshot in sync when sitio, fecha, and contacto are added', () => {
+  const baseCert = structuredClone(INITIAL_CERTIFICADOS_DETAILED[0]);
+  const certId = '14c1c36d-636e-437e-97ba-08ad845908f1';
+  const v1Id = '178d5ccc-2b6f-4e82-8855-05f9b2f7bada';
+  const siteId = '6efe5ad5-81a8-4a06-8107-1b7b65712ca7';
+  const fechaId = 'be804394-ed26-4ea7-99f3-798f4f73c498';
+  const contactoId = 'df04e489-a83d-4262-b0dc-e82fdb8e9b24';
+
+  const certWithEmptyV1: CertificadoDetailEntity = {
+    ...baseCert,
+    id: certId,
+    numero_certificado: '9001-885-03-10-2020',
+    id_certificado_version: v1Id,
+    selected_version_id: v1Id,
+    sitios: [
+      {
+        id: siteId,
+        id_certificado_version: v1Id,
+        numero_sitio: 0,
+        nombre_sitio: 'Planta CADIPRO',
+        direccion_sitio: 'Km. 1, Vía La Morita, San Rafael del Piñal',
+        personal_count: 102,
+      },
+    ],
+    fechas: [
+      {
+        id: fechaId,
+        id_certificado: certId,
+        id_certificado_version: v1Id,
+        fecha: '2020-10-30',
+        tipo_fecha: 'Otorgamiento',
+      },
+    ],
+    contactos: [
+      {
+        id: contactoId,
+        id_certificado: certId,
+        id_certificado_version: v1Id,
+        nombre: 'Elena Torres',
+        cargo: 'Jefe Cumplimiento de Calidad',
+        telefonos: [],
+        emails: [],
+      },
+    ],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    versiones: [
+      {
+        id: v1Id,
+        id_certificado: certId,
+        id_organizacion_version: '189dd484-daa1-4a45-a283-fee1b0a82abf',
+        version_numero: 1,
+        es_version_actual: true,
+        notas_version: 'Versión inicial',
+        id_estatus: baseCert.id_estatus,
+        estatus: baseCert.estatus,
+        id_sector_iaf: baseCert.id_sector_iaf,
+        sector_iaf: baseCert.sector_iaf,
+        sector_iaf_descripcion: baseCert.sector_iaf_descripcion,
+        id_subsector_iaf: baseCert.id_subsector_iaf,
+        subsector_iaf_codigo: baseCert.subsector_iaf_codigo,
+        subsector_iaf_descripcion: baseCert.subsector_iaf_descripcion,
+        subsector_categoria_riesgo: baseCert.subsector_categoria_riesgo,
+        multisitio: false,
+        sitios: [],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        contactos: [],
+        fechas: [],
+      },
+    ],
+  };
+
+  // Before sync, empty arrays on v1 shadow top-level collections in projected view & sub-entity resolvers
+  const beforeProj = resolveProjectedCertVersionContext(certWithEmptyV1, v1Id);
+  assert.equal(beforeProj.projectedCert.sitios.length, 0);
+  assert.equal(beforeProj.projectedCert.fechas?.length ?? 0, 0);
+  assert.equal(beforeProj.projectedCert.contactos?.length ?? 0, 0);
+
+  const synced = syncActiveCertVersionSnapshot(certWithEmptyV1);
+  const afterProj = resolveProjectedCertVersionContext(synced, v1Id);
+  assert.equal(afterProj.projectedCert.sitios.length, 1);
+  assert.equal(afterProj.projectedCert.sitios[0].nombre_sitio, 'Planta CADIPRO');
+  assert.equal(afterProj.projectedCert.fechas?.length, 1);
+  assert.equal(afterProj.projectedCert.fechas?.[0].fecha, '2020-10-30');
+  assert.equal(afterProj.projectedCert.contactos?.length, 1);
+  assert.equal(afterProj.projectedCert.contactos?.[0].nombre, 'Elena Torres');
+
+  const resolvedSite = resolveSitioDetailById({
+    sitioId: siteId,
+    activeCertId: certId,
+    certificates: [synced],
+    programacionAudits: [],
+  });
+  assert.ok(resolvedSite);
+  assert.equal(resolvedSite.nombre_sitio, 'Planta CADIPRO');
+
+  const resolvedFecha = resolveFechaDetailById({
+    fechaId,
+    certificates: [synced],
+    activeCertVersionId: v1Id,
+  });
+  assert.ok(resolvedFecha);
+  assert.equal(resolvedFecha.fecha, '2020-10-30');
+  assert.equal(resolvedFecha.tipo_fecha, 'Otorgamiento');
+
+  const resolvedContacto = resolveContactoDetailById({
+    contactoId,
+    certificates: [synced],
+    activeCertVersionId: v1Id,
+  });
+  assert.ok(resolvedContacto);
+  assert.equal(resolvedContacto.nombre, 'Elena Torres');
+  assert.equal(resolvedContacto.cargo, 'Jefe Cumplimiento de Calidad');
+});
+
+test('syncActiveCertVersionSnapshot updates only active v2 snapshot and leaves historical v1 snapshot frozen', () => {
+  const baseCert = structuredClone(INITIAL_CERTIFICADOS_DETAILED[0]);
+  const certId = '40000000-0000-0000-0000-000000000999';
+  const v1Id = '41000000-0000-0000-0000-000000000001';
+  const v2Id = '41000000-0000-0000-0000-000000000002';
+
+  const v1Site = {
+    id: '50000000-0000-0000-0000-000000000011',
+    id_certificado_version: v1Id,
+    numero_sitio: 0,
+    nombre_sitio: 'Planta Histórica v1',
+    direccion_sitio: 'Dirección v1',
+    personal_count: 50,
+  };
+  const v2SiteInitial = {
+    id: '50000000-0000-0000-0000-000000000021',
+    id_certificado_version: v2Id,
+    numero_sitio: 0,
+    nombre_sitio: 'Planta Vigente v2',
+    direccion_sitio: 'Dirección v2',
+    personal_count: 80,
+  };
+  const v2SiteAdded = {
+    id: '50000000-0000-0000-0000-000000000022',
+    id_certificado_version: v2Id,
+    numero_sitio: 1,
+    nombre_sitio: 'Sede Nueva v2',
+    direccion_sitio: 'Dirección Nueva v2',
+    personal_count: 25,
+  };
+  const v1Fecha = {
+    id: 'f0000000-0000-0000-0000-000000000011',
+    id_certificado: certId,
+    id_certificado_version: v1Id,
+    fecha: '2022-01-15',
+    tipo_fecha: 'Otorgamiento' as const,
+  };
+  const v2FechaAdded = {
+    id: 'f0000000-0000-0000-0000-000000000022',
+    id_certificado: certId,
+    id_certificado_version: v2Id,
+    fecha: '2025-03-01',
+    tipo_fecha: 'Renovación' as const,
+  };
+
+  const certWithTwoVersions: CertificadoDetailEntity = {
+    ...baseCert,
+    id: certId,
+    id_certificado_version: v2Id,
+    selected_version_id: v2Id,
+    sitios: [v2SiteInitial, v2SiteAdded],
+    fechas: [v2FechaAdded],
+    contactos: [],
+    procesos: [],
+    turnos: [],
+    noAplicables: [],
+    versiones: [
+      {
+        id: v2Id,
+        id_certificado: certId,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000002',
+        version_numero: 2,
+        es_version_actual: true,
+        notas_version: 'Versión 2 activa',
+        id_estatus: baseCert.id_estatus,
+        estatus: baseCert.estatus,
+        id_sector_iaf: baseCert.id_sector_iaf,
+        sector_iaf: baseCert.sector_iaf,
+        sector_iaf_descripcion: baseCert.sector_iaf_descripcion,
+        id_subsector_iaf: baseCert.id_subsector_iaf,
+        subsector_iaf_codigo: baseCert.subsector_iaf_codigo,
+        subsector_iaf_descripcion: baseCert.subsector_iaf_descripcion,
+        subsector_categoria_riesgo: baseCert.subsector_categoria_riesgo,
+        multisitio: true,
+        sitios: [v2SiteInitial],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        contactos: [],
+        fechas: [],
+      },
+      {
+        id: v1Id,
+        id_certificado: certId,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+        notas_version: 'Versión 1 histórica',
+        id_estatus: baseCert.id_estatus,
+        estatus: baseCert.estatus,
+        id_sector_iaf: baseCert.id_sector_iaf,
+        sector_iaf: baseCert.sector_iaf,
+        sector_iaf_descripcion: baseCert.sector_iaf_descripcion,
+        id_subsector_iaf: baseCert.id_subsector_iaf,
+        subsector_iaf_codigo: baseCert.subsector_iaf_codigo,
+        subsector_iaf_descripcion: baseCert.subsector_iaf_descripcion,
+        subsector_categoria_riesgo: baseCert.subsector_categoria_riesgo,
+        multisitio: false,
+        sitios: [v1Site],
+        procesos: [],
+        turnos: [],
+        noAplicables: [],
+        contactos: [],
+        fechas: [v1Fecha],
+      },
+    ],
+  };
+
+  const synced = syncActiveCertVersionSnapshot(certWithTwoVersions);
+  const v2Snap = synced.versiones?.find((v) => v.id === v2Id);
+  const v1Snap = synced.versiones?.find((v) => v.id === v1Id);
+
+  assert.ok(v2Snap);
+  assert.ok(v1Snap);
+  assert.equal(v2Snap.sitios?.length, 2);
+  assert.equal(v2Snap.sitios?.[1].nombre_sitio, 'Sede Nueva v2');
+  assert.equal(v2Snap.fechas?.length, 1);
+  assert.equal(v2Snap.fechas?.[0].fecha, '2025-03-01');
+
+  // Historical snapshot must remain completely untouched
+  assert.equal(v1Snap.sitios?.length, 1);
+  assert.equal(v1Snap.sitios?.[0].nombre_sitio, 'Planta Histórica v1');
+  assert.equal(v1Snap.fechas?.length, 1);
+  assert.equal(v1Snap.fechas?.[0].fecha, '2022-01-15');
 });

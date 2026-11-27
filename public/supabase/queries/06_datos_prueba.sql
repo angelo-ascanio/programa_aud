@@ -5381,3 +5381,261 @@ ON CONFLICT (id_auditoria, id_experto_tecnico) WHERE deleted_at IS NULL DO UPDAT
     deleted_at = NULL,
     deleted_by = NULL,
     updated_at = NOW();
+
+-- 29. Conglomerado Nestlé Venezuela (Nestlé Venezuela, S.A. + Nestlé Cadipro, S.A.)
+INSERT INTO public.grupo_empresarial (id, codigo_grupo, nombre, abreviacion, es_individual_auto, notas) VALUES
+    ('75013027-4394-49f1-8405-c5fba8f82ed0', 'NESTLE', 'Nestlé Venezuela', 'NESTLÉ', FALSE, 'Agrupa "Nestlé Venezuela, S.A." y "Nestlé Cadipro, S.A."')
+ON CONFLICT (id) DO UPDATE SET
+    codigo_grupo = EXCLUDED.codigo_grupo,
+    nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
+    es_individual_auto = EXCLUDED.es_individual_auto,
+    notas = EXCLUDED.notas,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.organizacion (id, id_grupo_empresarial, nombre, abreviacion, rif, direccion_fiscal) VALUES
+    ('41ece51a-97ac-4249-8686-5a08daf060c3', '75013027-4394-49f1-8405-c5fba8f82ed0', 'Nestlé Venezuela, S.A.', 'NESTLÉ', 'J-00012926-6', 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela'),
+    ('78af57af-ce42-48e0-a488-ab11d61d0c19', '75013027-4394-49f1-8405-c5fba8f82ed0', 'Nestlé Cadipro, S.A.', 'NESTLÉ CADIPRO', 'J-00102438-7', 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela')
+ON CONFLICT (id) DO UPDATE SET
+    id_grupo_empresarial = EXCLUDED.id_grupo_empresarial,
+    nombre = EXCLUDED.nombre,
+    abreviacion = EXCLUDED.abreviacion,
+    rif = EXCLUDED.rif,
+    direccion_fiscal = EXCLUDED.direccion_fiscal,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+DO $$
+DECLARE
+    v_target_id UUID := '9494773f-b4c6-44bd-8bea-af51a29a0b22'::UUID;
+    v_org_id UUID := '41ece51a-97ac-4249-8686-5a08daf060c3'::UUID;
+    v_existing_id UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.organizacion_version ov WHERE ov.id = v_target_id) THEN
+        UPDATE public.organizacion_version
+        SET es_version_actual = TRUE,
+            notas_version = 'Versión inicial Nestlé Venezuela, S.A.',
+            nombre = 'Nestlé Venezuela, S.A.',
+            abreviacion = 'NESTLÉ',
+            rif = 'J-00012926-6',
+            direccion_fiscal = 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela',
+            deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    ELSE
+        SELECT ov.id INTO v_existing_id
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = v_org_id
+          AND ov.version_numero = 1
+        LIMIT 1;
+
+        IF v_existing_id IS NOT NULL THEN
+            UPDATE public.organizacion_version
+            SET id = v_target_id,
+                es_version_actual = TRUE,
+                notas_version = 'Versión inicial Nestlé Venezuela, S.A.',
+                nombre = 'Nestlé Venezuela, S.A.',
+                abreviacion = 'NESTLÉ',
+                rif = 'J-00012926-6',
+                direccion_fiscal = 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela',
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_existing_id;
+        ELSE
+            INSERT INTO public.organizacion_version (
+                id, id_organizacion, version_numero, es_version_actual, notas_version,
+                nombre, abreviacion, rif, direccion_fiscal
+            ) VALUES (
+                v_target_id, v_org_id, 1, TRUE, 'Versión inicial Nestlé Venezuela, S.A.',
+                'Nestlé Venezuela, S.A.', 'NESTLÉ', 'J-00012926-6',
+                'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela'
+            )
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
+    END IF;
+END $$;
+
+DO $$
+DECLARE
+    v_target_id UUID := '189dd484-daa1-4a45-a283-fee1b0a82abf'::UUID;
+    v_org_id UUID := '78af57af-ce42-48e0-a488-ab11d61d0c19'::UUID;
+    v_existing_id UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.organizacion_version ov WHERE ov.id = v_target_id) THEN
+        UPDATE public.organizacion_version
+        SET es_version_actual = TRUE,
+            notas_version = 'Versión inicial Nestlé Cadipro, S.A.',
+            nombre = 'Nestlé Cadipro, S.A.',
+            abreviacion = 'NESTLÉ CADIPRO',
+            rif = 'J-00102438-7',
+            direccion_fiscal = 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela',
+            deleted_at = NULL,
+            deleted_by = NULL,
+            delete_reason = NULL,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    ELSE
+        SELECT ov.id INTO v_existing_id
+        FROM public.organizacion_version ov
+        WHERE ov.id_organizacion = v_org_id
+          AND ov.version_numero = 1
+        LIMIT 1;
+
+        IF v_existing_id IS NOT NULL THEN
+            UPDATE public.organizacion_version
+            SET id = v_target_id,
+                es_version_actual = TRUE,
+                notas_version = 'Versión inicial Nestlé Cadipro, S.A.',
+                nombre = 'Nestlé Cadipro, S.A.',
+                abreviacion = 'NESTLÉ CADIPRO',
+                rif = 'J-00102438-7',
+                direccion_fiscal = 'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela',
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_existing_id;
+        ELSE
+            INSERT INTO public.organizacion_version (
+                id, id_organizacion, version_numero, es_version_actual, notas_version,
+                nombre, abreviacion, rif, direccion_fiscal
+            ) VALUES (
+                v_target_id, v_org_id, 1, TRUE, 'Versión inicial Nestlé Cadipro, S.A.',
+                'Nestlé Cadipro, S.A.', 'NESTLÉ CADIPRO', 'J-00102438-7',
+                'Calle Altagracia, Edificio P&G, Piso 3, Urbanización Sorokaima, Sector La Trinidad, Zona Postal 1080, Caracas, Venezuela'
+            )
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
+    END IF;
+END $$;
+
+INSERT INTO public.certificado (id, id_norma, id_estatus, id_sector_iaf, id_subsector_iaf, id_organizacion, numero_certificado, multisitio) VALUES
+    ('14c1c36d-636e-437e-97ba-08ad845908f1', 'e0000000-0000-0000-0000-000000009001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '78af57af-ce42-48e0-a488-ab11d61d0c19', '9001-885-03-10-2020', FALSE),
+    ('7b958a33-e557-44b6-b31e-17d74b506aba', 'e0000000-0000-0000-0000-000000014001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '78af57af-ce42-48e0-a488-ab11d61d0c19', '14001-85-03-10-2020', FALSE),
+    ('fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', 'e0000000-0000-0000-0000-000000045001', 'a0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000003', 'da000000-0000-0000-0000-000000000031', '78af57af-ce42-48e0-a488-ab11d61d0c19', '45001-41-03-10-2020', FALSE)
+ON CONFLICT (numero_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    id_norma = EXCLUDED.id_norma,
+    id_estatus = EXCLUDED.id_estatus,
+    id_sector_iaf = EXCLUDED.id_sector_iaf,
+    id_subsector_iaf = EXCLUDED.id_subsector_iaf,
+    id_organizacion = EXCLUDED.id_organizacion,
+    multisitio = EXCLUDED.multisitio,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+DO $$
+DECLARE
+    v_rec RECORD;
+    v_existing_id UUID;
+BEGIN
+    FOR v_rec IN
+        SELECT *
+        FROM (VALUES
+            ('178d5ccc-2b6f-4e82-8855-05f9b2f7bada'::UUID, '14c1c36d-636e-437e-97ba-08ad845908f1'::UUID, 'Versión vigente 9001-885-03-10-2020.'),
+            ('9796af20-43f6-4ea6-80d9-c9da191dc4f1'::UUID, '7b958a33-e557-44b6-b31e-17d74b506aba'::UUID, 'Versión vigente 14001-85-03-10-2020.'),
+            ('2a36039f-fa67-47aa-b5d3-fd482e165097'::UUID, 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b'::UUID, 'Versión vigente 45001-41-03-10-2020.')
+        ) AS t(target_id, cert_id, notas)
+    LOOP
+        IF EXISTS (SELECT 1 FROM public.certificado_version cv WHERE cv.id = v_rec.target_id) THEN
+            UPDATE public.certificado_version
+            SET id_organizacion_version = '189dd484-daa1-4a45-a283-fee1b0a82abf'::UUID,
+                es_version_actual = TRUE,
+                notas_version = v_rec.notas,
+                id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
+                id_sector_iaf = 'd0000000-0000-0000-0000-000000000003'::UUID,
+                id_subsector_iaf = 'da000000-0000-0000-0000-000000000031'::UUID,
+                multisitio = FALSE,
+                deleted_at = NULL,
+                deleted_by = NULL,
+                delete_reason = NULL,
+                updated_at = NOW()
+            WHERE id = v_rec.target_id;
+        ELSE
+            SELECT cv.id INTO v_existing_id
+            FROM public.certificado_version cv
+            WHERE cv.id_certificado = v_rec.cert_id
+              AND cv.version_numero = 1
+            LIMIT 1;
+
+            IF v_existing_id IS NOT NULL THEN
+                UPDATE public.certificado_version
+                SET id = v_rec.target_id,
+                    id_organizacion_version = '189dd484-daa1-4a45-a283-fee1b0a82abf'::UUID,
+                    es_version_actual = TRUE,
+                    notas_version = v_rec.notas,
+                    id_estatus = 'a0000000-0000-0000-0000-000000000001'::UUID,
+                    id_sector_iaf = 'd0000000-0000-0000-0000-000000000003'::UUID,
+                    id_subsector_iaf = 'da000000-0000-0000-0000-000000000031'::UUID,
+                    multisitio = FALSE,
+                    deleted_at = NULL,
+                    deleted_by = NULL,
+                    delete_reason = NULL,
+                    updated_at = NOW()
+                WHERE id = v_existing_id;
+            ELSE
+                INSERT INTO public.certificado_version (
+                    id, id_certificado, id_organizacion_version, version_numero, es_version_actual,
+                    notas_version, id_estatus, id_sector_iaf, id_subsector_iaf, multisitio
+                ) VALUES (
+                    v_rec.target_id, v_rec.cert_id, '189dd484-daa1-4a45-a283-fee1b0a82abf'::UUID, 1, TRUE,
+                    v_rec.notas,
+                    'a0000000-0000-0000-0000-000000000001'::UUID,
+                    'd0000000-0000-0000-0000-000000000003'::UUID,
+                    'da000000-0000-0000-0000-000000000031'::UUID,
+                    FALSE
+                )
+                ON CONFLICT (id) DO NOTHING;
+            END IF;
+        END IF;
+    END LOOP;
+END $$;
+
+INSERT INTO public.alcance (id, id_certificado, alcance_es, alcance_en) VALUES
+    ('0e0dde35-a862-4f42-a509-efa0b1b615f0', '14c1c36d-636e-437e-97ba-08ad845908f1', 'Fabricación para uso industrial de leche en polvo entera (26% estabilizada), leche descremada, crema de leche; desde la recepción de la leche fresca hasta la entrega', 'Manufacture of whole milk powder (26% stabilized), skim milk, cream for industrial use; from the reception of fresh milk to delivery')
+ON CONFLICT (id_certificado) WHERE deleted_at IS NULL DO UPDATE SET
+    alcance_es = EXCLUDED.alcance_es,
+    alcance_en = EXCLUDED.alcance_en,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.sitio (id, id_certificado, id_certificado_version, numero_sitio, nombre_sitio, direccion_sitio, personal_count) VALUES
+    ('6efe5ad5-81a8-4a06-8107-1b7b65712ca7', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 0, 'Planta CADIPRO', 'Km. 1, Vía La Morita, San Rafael del Piñal, Municipio Fernández Feo, Edo. Táchira, Código Postal: 5032, Venezuela.', 102)
+ON CONFLICT (id_certificado_version, numero_sitio) WHERE deleted_at IS NULL DO UPDATE SET
+    nombre_sitio = EXCLUDED.nombre_sitio,
+    direccion_sitio = EXCLUDED.direccion_sitio,
+    personal_count = EXCLUDED.personal_count,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.fecha_certificado (id, id_certificado, id_certificado_version, fecha, tipo_fecha) VALUES
+    ('be804394-ed26-4ea7-99f3-798f4f73c498', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', '2020-10-30', 'Otorgamiento')
+ON CONFLICT (id_certificado_version, tipo_fecha, fecha) WHERE deleted_at IS NULL DO UPDATE SET
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();
+
+INSERT INTO public.contacto_certificado (id, id_certificado, id_certificado_version, nombre, cargo) VALUES
+    ('df04e489-a83d-4262-b0dc-e82fdb8e9b24', '14c1c36d-636e-437e-97ba-08ad845908f1', '178d5ccc-2b6f-4e82-8855-05f9b2f7bada', 'Elena Torres', 'Jefe Cumplimiento de Calidad')
+ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre))) WHERE deleted_at IS NULL DO UPDATE SET
+    nombre = EXCLUDED.nombre,
+    cargo = EXCLUDED.cargo,
+    deleted_at = NULL,
+    deleted_by = NULL,
+    delete_reason = NULL,
+    updated_at = NOW();

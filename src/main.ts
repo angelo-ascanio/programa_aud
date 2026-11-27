@@ -651,6 +651,7 @@ import {
   persistCloneCertificadoVersion,
   persistMigrateAuditsVersion,
   resolveCertVersionSnapshotForAudit,
+  syncActiveCertVersionSnapshot,
   validateAuditVersionResolutions,
   type AuditMigrationAction,
   type AuditMigrationHallazgoRecord,
@@ -7621,12 +7622,12 @@ function bindAuthenticatedEvents(): void {
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
         (c) =>
           c.id_norma === currentId
-            ? {
+            ? syncActiveCertVersionSnapshot({
                 ...c,
                 norma_codigo: normData.codigo,
                 norma_titulo: normData.titulo,
                 esquema: normData.esquema,
-              }
+              })
             : c
       );
       state.exploration.records = state.exploration.records.map((rec) =>
@@ -10050,11 +10051,11 @@ function bindAuthenticatedEvents(): void {
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
         (cert) =>
           cert.id_sector_iaf === currentId
-            ? {
+            ? syncActiveCertVersionSnapshot({
                 ...cert,
                 sector_iaf: nextSectorNum,
                 sector_iaf_descripcion: nextSectorDesc,
-              }
+              })
             : cert
       );
       state.domainData.allAcreditaciones = state.domainData.allAcreditaciones.map((acr) => ({
@@ -10392,14 +10393,14 @@ function bindAuthenticatedEvents(): void {
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
         (cert) =>
           cert.id_subsector_iaf === currentId
-            ? {
+            ? syncActiveCertVersionSnapshot({
                 ...cert,
                 id_sector_iaf: parentSector.id,
                 sector_iaf: parentSector.sector,
                 sector_iaf_descripcion: parentSector.descripcion,
                 subsector_iaf_codigo: nextSubsector.codigo,
                 subsector_iaf_descripcion: nextSubsector.descripcion,
-              }
+              })
             : cert
       );
       state.domainData.allAuditorsDetailed = state.domainData.allAuditorsDetailed.map((aud) => {
@@ -18022,6 +18023,11 @@ function bindAuthenticatedEvents(): void {
       multisitio: existingCert.multisitio,
     };
 
+    const resolvedOrgVersionId =
+      normDraft.id_organizacion !== existingCert.id_organizacion
+        ? matchedOrg?.id_organizacion_version_actual || existingCert.id_organizacion_version || ''
+        : existingCert.id_organizacion_version || matchedOrg?.id_organizacion_version_actual || '';
+
     let updatedCertRef: CertificadoDetailEntity | null = null;
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== selectedCertId) return c;
@@ -18033,6 +18039,7 @@ function bindAuthenticatedEvents(): void {
         v.id === activeVerId || v.es_version_actual
           ? {
               ...v,
+              id_organizacion_version: resolvedOrgVersionId || v.id_organizacion_version,
               id_estatus: normDraft.id_estatus,
               estatus: updatedEstatus,
               id_sector_iaf: normDraft.id_sector_iaf,
@@ -18050,6 +18057,7 @@ function bindAuthenticatedEvents(): void {
       updatedCertRef = {
         ...c,
         id_organizacion: normDraft.id_organizacion,
+        id_organizacion_version: resolvedOrgVersionId || c.id_organizacion_version,
         organizacion_nombre: updatedOrgNombre,
         organizacion_abreviacion: updatedOrgAbrev,
         organizacion_rif: updatedOrgRif,
@@ -18132,6 +18140,9 @@ function bindAuthenticatedEvents(): void {
             await supabase
               .from('certificado_version')
               .update({
+                ...(STRICT_UUID_PATTERN.test(resolvedOrgVersionId)
+                  ? { id_organizacion_version: resolvedOrgVersionId }
+                  : {}),
                 id_estatus: normDraft.id_estatus,
                 id_sector_iaf: normDraft.id_sector_iaf,
                 id_subsector_iaf: normDraft.id_subsector_iaf,
@@ -19480,11 +19491,18 @@ function bindAuthenticatedEvents(): void {
       }
 
       const newId = crypto.randomUUID();
+      const targetActiveVerId =
+        targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        targetCert.id_certificado_version ||
+        '';
       if (STRICT_UUID_PATTERN.test(normSitio.id_certificado)) {
         try {
           const { error } = await supabase.from('sitio').insert({
             id: newId,
             id_certificado: normSitio.id_certificado,
+            ...(STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             numero_sitio: normSitio.numero_sitio,
             nombre_sitio: normSitio.nombre_sitio,
             direccion_sitio: normSitio.direccion_sitio,
@@ -19503,6 +19521,7 @@ function bindAuthenticatedEvents(): void {
       const newSiteEntity: SiteEntity = {
         id: newId,
         id_certificado: targetCert.id,
+        ...(targetActiveVerId ? { id_certificado_version: targetActiveVerId } : {}),
         numero_sitio: normSitio.numero_sitio,
         nombre_sitio: normSitio.nombre_sitio,
         direccion_sitio: normSitio.direccion_sitio,
@@ -19517,12 +19536,12 @@ function bindAuthenticatedEvents(): void {
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
         (c) =>
           c.id === targetCert.id
-            ? {
+            ? syncActiveCertVersionSnapshot({
                 ...c,
                 sitios: [...c.sitios, newSiteEntity].sort(
                   (a, b) => a.numero_sitio - b.numero_sitio
                 ),
-              }
+              })
             : c
       );
 
@@ -19624,12 +19643,21 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
+    const certChanged = normSitio.id_certificado !== currentSitio.id_certificado;
+    const targetActiveVerId =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
+
     if (STRICT_UUID_PATTERN.test(sitioId!) && STRICT_UUID_PATTERN.test(normSitio.id_certificado)) {
       try {
         const { error } = await supabase
           .from('sitio')
           .update({
             id_certificado: normSitio.id_certificado,
+            ...(certChanged && STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             numero_sitio: normSitio.numero_sitio,
             nombre_sitio: normSitio.nombre_sitio,
             direccion_sitio: normSitio.direccion_sitio,
@@ -19655,7 +19683,6 @@ function bindAuthenticatedEvents(): void {
       personal_count: currentSitio.personal_count ?? 10,
     };
 
-    const certChanged = normSitio.id_certificado !== currentSitio.id_certificado;
     const sourceCertObj = state.domainData.allCertificadosDetailed.find(
       (c) => c.id === currentSitio.id_certificado
     );
@@ -19667,6 +19694,13 @@ function bindAuthenticatedEvents(): void {
         turnos_vinculados: [],
       }),
       id_certificado: normSitio.id_certificado,
+      ...(certChanged && targetActiveVerId
+        ? { id_certificado_version: targetActiveVerId }
+        : existingRawSite?.id_certificado_version
+          ? { id_certificado_version: existingRawSite.id_certificado_version }
+          : targetActiveVerId
+            ? { id_certificado_version: targetActiveVerId }
+            : {}),
       numero_sitio: normSitio.numero_sitio,
       nombre_sitio: normSitio.nombre_sitio,
       direccion_sitio: normSitio.direccion_sitio,
@@ -19682,7 +19716,7 @@ function bindAuthenticatedEvents(): void {
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (certChanged) {
         if (c.id === currentSitio.id_certificado) {
-          return {
+          return syncActiveCertVersionSnapshot({
             ...c,
             sitios: c.sitios.filter((s) => s.id !== sitioId),
             turnos: c.turnos.map((t) => ({
@@ -19691,20 +19725,20 @@ function bindAuthenticatedEvents(): void {
                 (label) => label !== currentSitio.nombre_sitio
               ),
             })),
-          };
+          });
         }
         if (c.id === normSitio.id_certificado) {
-          return {
+          return syncActiveCertVersionSnapshot({
             ...c,
             sitios: [...c.sitios, updatedSiteEntity].sort(
               (a, b) => a.numero_sitio - b.numero_sitio
             ),
-          };
+          });
         }
         return c;
       }
       if (c.id !== currentSitio.id_certificado) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         sitios: c.sitios
           .map((s) => (s.id === sitioId ? updatedSiteEntity : s))
@@ -19715,7 +19749,7 @@ function bindAuthenticatedEvents(): void {
             label === currentSitio.nombre_sitio ? normSitio.nombre_sitio : label
           ),
         })),
-      };
+      });
     });
 
     state.domainData.sites = state.domainData.sites.map((s) =>
@@ -19870,10 +19904,10 @@ function bindAuthenticatedEvents(): void {
     state.domainData.archivedSiteIds.add(sitioId);
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
       c.id === currentSitio.id_certificado
-        ? {
+        ? syncActiveCertVersionSnapshot({
             ...c,
             sitios: c.sitios.filter((s) => s.id !== sitioId),
-          }
+          })
         : c
     );
     state.domainData.sites = state.domainData.sites.filter((s) => s.id !== sitioId);
@@ -19963,6 +19997,10 @@ function bindAuthenticatedEvents(): void {
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== currentSitio.id_certificado) return c;
+      const activeVerId =
+        c.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        c.id_certificado_version ||
+        '';
 
       const updatedSites = c.sitios.map((s) => {
         if (s.id !== sitioId) return s;
@@ -19989,6 +20027,7 @@ function bindAuthenticatedEvents(): void {
             ...c.turnos,
             {
               id: shift.id,
+              ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
               hora_entrada: shift.hora_entrada,
               hora_salida: shift.hora_salida,
               descripcion: shift.descripcion,
@@ -19996,11 +20035,11 @@ function bindAuthenticatedEvents(): void {
             },
           ];
 
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         sitios: updatedSites,
         turnos: updatedCertShifts,
-      };
+      });
     });
 
     recordPhase5SessionLog('sitio', sitioId, 'UPDATE', null, {
@@ -20051,7 +20090,7 @@ function bindAuthenticatedEvents(): void {
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== currentSitio.id_certificado) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         sitios: c.sitios.map((s) =>
           s.id === sitioId
@@ -20076,7 +20115,7 @@ function bindAuthenticatedEvents(): void {
               }
             : t
         ),
-      };
+      });
     });
 
     recordPhase5SessionLog(
@@ -20482,11 +20521,18 @@ function bindAuthenticatedEvents(): void {
       }
 
       const newId = crypto.randomUUID();
+      const targetActiveVerId =
+        targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+        targetCert.id_certificado_version ||
+        '';
       if (STRICT_UUID_PATTERN.test(normProc.id_certificado)) {
         try {
           const { error } = await supabase.from('proceso').insert({
             id: newId,
             id_certificado: normProc.id_certificado,
+            ...(STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             nombre_proceso: normProc.nombre_proceso,
             tipo: normProc.tipo,
           });
@@ -20503,6 +20549,7 @@ function bindAuthenticatedEvents(): void {
       const newProcessEntity: ProcessEntity = {
         id: newId,
         id_certificado: targetCert.id,
+        ...(targetActiveVerId ? { id_certificado_version: targetActiveVerId } : {}),
         nombre_proceso: normProc.nombre_proceso,
         tipo: normProc.tipo,
         responsable: normProc.responsable,
@@ -20513,10 +20560,10 @@ function bindAuthenticatedEvents(): void {
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
         (c) =>
           c.id === targetCert.id
-            ? {
+            ? syncActiveCertVersionSnapshot({
                 ...c,
                 procesos: [...c.procesos, newProcessEntity],
-              }
+              })
             : c
       );
 
@@ -20602,12 +20649,21 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
+    const certChanged = normProc.id_certificado !== currentProceso.id_certificado;
+    const targetActiveVerId =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
+
     if (STRICT_UUID_PATTERN.test(procesoId!) && STRICT_UUID_PATTERN.test(normProc.id_certificado)) {
       try {
         const { error } = await supabase
           .from('proceso')
           .update({
             id_certificado: normProc.id_certificado,
+            ...(certChanged && STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             nombre_proceso: normProc.nombre_proceso,
             tipo: normProc.tipo,
             updated_at: new Date().toISOString(),
@@ -20630,7 +20686,6 @@ function bindAuthenticatedEvents(): void {
       responsable: currentProceso.responsable || null,
     };
 
-    const certChanged = normProc.id_certificado !== currentProceso.id_certificado;
     const sourceCertObj = state.domainData.allCertificadosDetailed.find(
       (c) => c.id === currentProceso.id_certificado
     );
@@ -20643,6 +20698,13 @@ function bindAuthenticatedEvents(): void {
         requisitos_detalle: [],
       }),
       id_certificado: normProc.id_certificado,
+      ...(certChanged && targetActiveVerId
+        ? { id_certificado_version: targetActiveVerId }
+        : existingRawProc?.id_certificado_version
+          ? { id_certificado_version: existingRawProc.id_certificado_version }
+          : targetActiveVerId
+            ? { id_certificado_version: targetActiveVerId }
+            : {}),
       nombre_proceso: normProc.nombre_proceso,
       tipo: normProc.tipo,
       responsable: normProc.responsable,
@@ -20651,24 +20713,24 @@ function bindAuthenticatedEvents(): void {
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (certChanged) {
         if (c.id === currentProceso.id_certificado) {
-          return {
+          return syncActiveCertVersionSnapshot({
             ...c,
             procesos: c.procesos.filter((p) => p.id !== procesoId),
-          };
+          });
         }
         if (c.id === normProc.id_certificado) {
-          return {
+          return syncActiveCertVersionSnapshot({
             ...c,
             procesos: [...c.procesos, updatedProcEntity],
-          };
+          });
         }
         return c;
       }
       if (c.id !== currentProceso.id_certificado) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         procesos: c.procesos.map((p) => (p.id === procesoId ? updatedProcEntity : p)),
-      };
+      });
     });
 
     state.domainData.processes = state.domainData.processes.map((p) =>
@@ -20804,7 +20866,10 @@ function bindAuthenticatedEvents(): void {
     state.domainData.archivedProcesoIds.add(procesoId);
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
       c.id === currentProceso.id_certificado
-        ? { ...c, procesos: c.procesos.filter((p) => p.id !== procesoId) }
+        ? syncActiveCertVersionSnapshot({
+            ...c,
+            procesos: c.procesos.filter((p) => p.id !== procesoId),
+          })
         : c
     );
     state.domainData.processes = state.domainData.processes.filter((p) => p.id !== procesoId);
@@ -20957,7 +21022,7 @@ function bindAuthenticatedEvents(): void {
     if (reqsToAdd.length === 0) return;
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== targetCertId) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         procesos: c.procesos.map((p) => {
           if (p.id !== procesoId) return p;
@@ -20995,7 +21060,7 @@ function bindAuthenticatedEvents(): void {
             ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
           };
         }),
-      };
+      });
     });
 
     state.domainData.processes = state.domainData.processes.map((p) => {
@@ -21057,7 +21122,7 @@ function bindAuthenticatedEvents(): void {
     const removeSet = new Set(codesToRemove.map((c) => c.trim().toLowerCase()));
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== targetCertId) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         procesos: c.procesos.map((p) => {
           if (p.id !== procesoId) return p;
@@ -21087,7 +21152,7 @@ function bindAuthenticatedEvents(): void {
             ...(nextByCert ? { requisitos_by_certificado: nextByCert } : {}),
           };
         }),
-      };
+      });
     });
 
     state.domainData.processes = state.domainData.processes.map((p) =>
@@ -21741,27 +21806,29 @@ function bindAuthenticatedEvents(): void {
           applySingleCertProcesoReqs(delta.id_certificado_destino, procesoId, toAdd);
         }
         state.domainData.allCertificadosDetailed =
-          state.domainData.allCertificadosDetailed.map((c) => ({
-            ...c,
-            procesos: c.procesos.map((p) => {
-              if (p.id !== procesoId) return p;
-              const updatedTargets = (p.sharedTargets || []).map((st) =>
-                syncPlan.targetDeltas.some(
-                  (d) => d.id_certificado_destino === st.targetCertId
-                )
-                  ? { ...st, sincronizar_requisitos: enableSync }
-                  : st
-              );
-              const isTargetCert = syncPlan.targetDeltas.some(
-                (d) => d.id_certificado_destino === c.id
-              );
-              return {
-                ...p,
-                sharedTargets: updatedTargets,
-                ...(isTargetCert ? { sharedLinkSincronizarRequisitos: enableSync } : {}),
-              };
-            }),
-          }));
+          state.domainData.allCertificadosDetailed.map((c) =>
+            syncActiveCertVersionSnapshot({
+              ...c,
+              procesos: c.procesos.map((p) => {
+                if (p.id !== procesoId) return p;
+                const updatedTargets = (p.sharedTargets || []).map((st) =>
+                  syncPlan.targetDeltas.some(
+                    (d) => d.id_certificado_destino === st.targetCertId
+                  )
+                    ? { ...st, sincronizar_requisitos: enableSync }
+                    : st
+                );
+                const isTargetCert = syncPlan.targetDeltas.some(
+                  (d) => d.id_certificado_destino === c.id
+                );
+                return {
+                  ...p,
+                  sharedTargets: updatedTargets,
+                  ...(isTargetCert ? { sharedLinkSincronizarRequisitos: enableSync } : {}),
+                };
+              }),
+            })
+          );
         showFloatingToast(
           `Requisitos sincronizados en ${syncPlan.targetDeltas.length} certificado(s) de ${sourceCert.norma_codigo}.`,
           'success'
@@ -22164,6 +22231,10 @@ function bindAuthenticatedEvents(): void {
           (cert) => {
             const targetSite = cert.sitios.find((s) => s.id === selectedSitioId);
             if (!targetSite) return cert;
+            const activeVerId =
+              cert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+              cert.id_certificado_version ||
+              '';
             linkedSitioName = targetSite.nombre_sitio;
             const nextSitios = cert.sitios.map((s) =>
               s.id === selectedSitioId
@@ -22179,17 +22250,18 @@ function bindAuthenticatedEvents(): void {
               ...cert.turnos,
               {
                 id: newId,
+                ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
                 hora_entrada: normTurno.hora_entrada,
                 hora_salida: normTurno.hora_salida,
                 descripcion: normTurno.descripcion,
                 sitios_vinculados: [targetSite.nombre_sitio],
               },
             ];
-            return {
+            return syncActiveCertVersionSnapshot({
               ...cert,
               sitios: nextSitios,
               turnos: nextTurnos,
-            };
+            });
           }
         );
       }
@@ -22312,27 +22384,29 @@ function bindAuthenticatedEvents(): void {
         : s
     );
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => ({
-      ...c,
-      turnos: c.turnos.map((t) =>
-        t.id === turnoId
-          ? {
-              ...t,
-              hora_entrada: normTurno.hora_entrada,
-              hora_salida: normTurno.hora_salida,
-              descripcion: normTurno.descripcion,
-            }
-          : t
-      ),
-      sitios: c.sitios.map((s) => ({
-        ...s,
-        turnos_vinculados: (s.turnos_vinculados || []).map((lbl) =>
-          lbl.trim().toLowerCase() === currentTurno.descripcion.trim().toLowerCase()
-            ? normTurno.descripcion
-            : lbl
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+      syncActiveCertVersionSnapshot({
+        ...c,
+        turnos: c.turnos.map((t) =>
+          t.id === turnoId
+            ? {
+                ...t,
+                hora_entrada: normTurno.hora_entrada,
+                hora_salida: normTurno.hora_salida,
+                descripcion: normTurno.descripcion,
+              }
+            : t
         ),
-      })),
-    }));
+        sitios: c.sitios.map((s) => ({
+          ...s,
+          turnos_vinculados: (s.turnos_vinculados || []).map((lbl) =>
+            lbl.trim().toLowerCase() === currentTurno.descripcion.trim().toLowerCase()
+              ? normTurno.descripcion
+              : lbl
+          ),
+        })),
+      })
+    );
 
     const labelRange = `${formatTurnoTime(normTurno.hora_entrada)} – ${formatTurnoTime(normTurno.hora_salida)}`;
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
@@ -22585,12 +22659,20 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
+    const targetActiveVerId =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
+    const activeVersionFechas = (targetCert.fechas || []).filter((f) => {
+      if (state.domainData.archivedFechaIds.has(f.id)) return false;
+      if (!targetActiveVerId || !f.id_certificado_version) return true;
+      return f.id_certificado_version === targetActiveVerId;
+    });
+
     const validation = validateFechaInput({
       tipo_fecha: draft.tipo_fecha,
       fecha: draft.fecha,
-      existingFechas: (targetCert.fechas || []).filter(
-        (f) => !state.domainData.archivedFechaIds.has(f.id)
-      ),
+      existingFechas: activeVersionFechas,
       currentFechaId: isCreating ? null : fechaId,
     });
 
@@ -22609,6 +22691,9 @@ function bindAuthenticatedEvents(): void {
           const { error } = await supabase.from('fecha_certificado').insert({
             id: newFechaId,
             id_certificado: targetCert.id,
+            ...(STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             tipo_fecha,
             fecha,
           });
@@ -22628,6 +22713,7 @@ function bindAuthenticatedEvents(): void {
       const newFecha: FechaCertificadoEntity = {
         id: newFechaId,
         id_certificado: targetCert.id,
+        ...(targetActiveVerId ? { id_certificado_version: targetActiveVerId } : {}),
         tipo_fecha,
         fecha,
       };
@@ -22641,12 +22727,12 @@ function bindAuthenticatedEvents(): void {
 
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
         c.id === targetCert.id
-          ? {
+          ? syncActiveCertVersionSnapshot({
               ...c,
               fechas: nextFechas,
               fecha_emision: derivedDates.fecha_emision,
               fecha_vencimiento: derivedDates.fecha_vencimiento,
-            }
+            })
           : c
       );
       state.exploration.records = state.exploration.records.map((r) =>
@@ -22699,12 +22785,16 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentFecha) return;
 
+    const certChanged = targetCert.id !== currentFecha.id_certificado;
     if (STRICT_UUID_PATTERN.test(fechaId!) && STRICT_UUID_PATTERN.test(targetCert.id)) {
       try {
         const { error } = await supabase
           .from('fecha_certificado')
           .update({
             id_certificado: targetCert.id,
+            ...(certChanged && STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             tipo_fecha,
             fecha,
             updated_at: new Date().toISOString(),
@@ -22729,9 +22819,17 @@ function bindAuthenticatedEvents(): void {
       fecha: currentFecha.fecha,
     };
 
+    const existingRawFecha = targetCert.fechas?.find((f) => f.id === fechaId);
     const updatedFechaItem: FechaCertificadoEntity = {
       id: fechaId!,
       id_certificado: targetCert.id,
+      ...(certChanged && targetActiveVerId
+        ? { id_certificado_version: targetActiveVerId }
+        : existingRawFecha?.id_certificado_version
+          ? { id_certificado_version: existingRawFecha.id_certificado_version }
+          : targetActiveVerId
+            ? { id_certificado_version: targetActiveVerId }
+            : {}),
       tipo_fecha,
       fecha,
     };
@@ -22753,12 +22851,12 @@ function bindAuthenticatedEvents(): void {
         c.fecha_vencimiento
       );
       derivedByCertId.set(c.id, derivedDates);
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         fechas: nextFechas,
         fecha_emision: derivedDates.fecha_emision,
         fecha_vencimiento: derivedDates.fecha_vencimiento,
-      };
+      });
     });
 
     state.exploration.records = state.exploration.records.map((r) => {
@@ -22953,12 +23051,20 @@ function bindAuthenticatedEvents(): void {
       return;
     }
 
+    const targetActiveVerId =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
+    const activeVersionContactos = (targetCert.contactos || []).filter((c) => {
+      if (state.domainData.archivedContactoIds.has(c.id)) return false;
+      if (!targetActiveVerId || !c.id_certificado_version) return true;
+      return c.id_certificado_version === targetActiveVerId;
+    });
+
     const validation = validateContactoInput({
       nombre: draft.nombre,
       cargo: draft.cargo,
-      existingContactos: (targetCert.contactos || []).filter(
-        (c) => !state.domainData.archivedContactoIds.has(c.id)
-      ),
+      existingContactos: activeVersionContactos,
       currentContactoId: isCreating ? null : contactoId,
     });
 
@@ -22977,6 +23083,9 @@ function bindAuthenticatedEvents(): void {
           const { error } = await supabase.from('contacto_certificado').insert({
             id: newContactoId,
             id_certificado: targetCert.id,
+            ...(STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             nombre,
             cargo,
           });
@@ -22996,6 +23105,7 @@ function bindAuthenticatedEvents(): void {
       const newContacto: ContactoCertificadoEntity = {
         id: newContactoId,
         id_certificado: targetCert.id,
+        ...(targetActiveVerId ? { id_certificado_version: targetActiveVerId } : {}),
         nombre,
         cargo,
         telefonos: [],
@@ -23004,7 +23114,7 @@ function bindAuthenticatedEvents(): void {
 
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
         c.id === targetCert.id
-          ? { ...c, contactos: [...(c.contactos || []), newContacto] }
+          ? syncActiveCertVersionSnapshot({ ...c, contactos: [...(c.contactos || []), newContacto] })
           : c
       );
 
@@ -23054,12 +23164,16 @@ function bindAuthenticatedEvents(): void {
     });
     if (!currentContacto) return;
 
+    const certChanged = targetCert.id !== currentContacto.id_certificado;
     if (STRICT_UUID_PATTERN.test(contactoId!) && STRICT_UUID_PATTERN.test(targetCert.id)) {
       try {
         const { error } = await supabase
           .from('contacto_certificado')
           .update({
             id_certificado: targetCert.id,
+            ...(certChanged && STRICT_UUID_PATTERN.test(targetActiveVerId)
+              ? { id_certificado_version: targetActiveVerId }
+              : {}),
             nombre,
             cargo,
             updated_at: new Date().toISOString(),
@@ -23088,7 +23202,19 @@ function bindAuthenticatedEvents(): void {
     for (const c of state.domainData.allCertificadosDetailed) {
       const found = (c.contactos || []).find((ct) => ct.id === contactoId);
       if (found) {
-        movedContacto = { ...found, id_certificado: targetCert.id, nombre, cargo };
+        movedContacto = {
+          ...found,
+          id_certificado: targetCert.id,
+          ...(certChanged && targetActiveVerId
+            ? { id_certificado_version: targetActiveVerId }
+            : found.id_certificado_version
+              ? { id_certificado_version: found.id_certificado_version }
+              : targetActiveVerId
+                ? { id_certificado_version: targetActiveVerId }
+                : {}),
+          nombre,
+          cargo,
+        };
         break;
       }
     }
@@ -23098,15 +23224,15 @@ function bindAuthenticatedEvents(): void {
         const withoutCurrent = (c.contactos || []).filter((ct) => ct.id !== contactoId);
         if (c.id === targetCert.id) {
           const hadAlready = (c.contactos || []).some((ct) => ct.id === contactoId);
-          return {
+          return syncActiveCertVersionSnapshot({
             ...c,
             contactos: hadAlready
               ? (c.contactos || []).map((ct) => (ct.id === contactoId ? movedContacto! : ct))
               : [...withoutCurrent, movedContacto!],
-          };
+          });
         }
         return withoutCurrent.length !== (c.contactos || []).length
-          ? { ...c, contactos: withoutCurrent }
+          ? syncActiveCertVersionSnapshot({ ...c, contactos: withoutCurrent })
           : c;
       });
     }
@@ -23423,14 +23549,14 @@ function bindAuthenticatedEvents(): void {
 
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
         c.id === parentContacto.id_certificado
-          ? {
+          ? syncActiveCertVersionSnapshot({
               ...c,
               contactos: (c.contactos || []).map((ct) =>
                 ct.id === parentContacto.id
                   ? { ...ct, telefonos: [...(ct.telefonos || []), newTelefono] }
                   : ct
               ),
-            }
+            })
           : c
       );
 
@@ -23514,24 +23640,26 @@ function bindAuthenticatedEvents(): void {
       tipo_telefono,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => ({
-      ...c,
-      contactos: (c.contactos || []).map((ct) => {
-        const withoutCurrent = (ct.telefonos || []).filter((t) => t.id !== telefonoId);
-        if (ct.id === parentContacto.id) {
-          const hadAlready = (ct.telefonos || []).some((t) => t.id === telefonoId);
-          return {
-            ...ct,
-            telefonos: hadAlready
-              ? (ct.telefonos || []).map((t) => (t.id === telefonoId ? updatedTelefonoItem : t))
-              : [...withoutCurrent, updatedTelefonoItem],
-          };
-        }
-        return withoutCurrent.length !== (ct.telefonos || []).length
-          ? { ...ct, telefonos: withoutCurrent }
-          : ct;
-      }),
-    }));
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+      syncActiveCertVersionSnapshot({
+        ...c,
+        contactos: (c.contactos || []).map((ct) => {
+          const withoutCurrent = (ct.telefonos || []).filter((t) => t.id !== telefonoId);
+          if (ct.id === parentContacto.id) {
+            const hadAlready = (ct.telefonos || []).some((t) => t.id === telefonoId);
+            return {
+              ...ct,
+              telefonos: hadAlready
+                ? (ct.telefonos || []).map((t) => (t.id === telefonoId ? updatedTelefonoItem : t))
+                : [...withoutCurrent, updatedTelefonoItem],
+            };
+          }
+          return withoutCurrent.length !== (ct.telefonos || []).length
+            ? { ...ct, telefonos: withoutCurrent }
+            : ct;
+        }),
+      })
+    );
 
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
       seg.entityType === 'telefono_contacto' && seg.entityId === telefonoId
@@ -23679,14 +23807,14 @@ function bindAuthenticatedEvents(): void {
 
       state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
         c.id === parentContacto.id_certificado
-          ? {
+          ? syncActiveCertVersionSnapshot({
               ...c,
               contactos: (c.contactos || []).map((ct) =>
                 ct.id === parentContacto.id
                   ? { ...ct, emails: [...(ct.emails || []), newEmail] }
                   : ct
               ),
-            }
+            })
           : c
       );
 
@@ -23768,24 +23896,26 @@ function bindAuthenticatedEvents(): void {
       tipo_email,
     };
 
-    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => ({
-      ...c,
-      contactos: (c.contactos || []).map((ct) => {
-        const withoutCurrent = (ct.emails || []).filter((em) => em.id !== emailId);
-        if (ct.id === parentContacto.id) {
-          const hadAlready = (ct.emails || []).some((em) => em.id === emailId);
-          return {
-            ...ct,
-            emails: hadAlready
-              ? (ct.emails || []).map((em) => (em.id === emailId ? updatedEmailItem : em))
-              : [...withoutCurrent, updatedEmailItem],
-          };
-        }
-        return withoutCurrent.length !== (ct.emails || []).length
-          ? { ...ct, emails: withoutCurrent }
-          : ct;
-      }),
-    }));
+    state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) =>
+      syncActiveCertVersionSnapshot({
+        ...c,
+        contactos: (c.contactos || []).map((ct) => {
+          const withoutCurrent = (ct.emails || []).filter((em) => em.id !== emailId);
+          if (ct.id === parentContacto.id) {
+            const hadAlready = (ct.emails || []).some((em) => em.id === emailId);
+            return {
+              ...ct,
+              emails: hadAlready
+                ? (ct.emails || []).map((em) => (em.id === emailId ? updatedEmailItem : em))
+                : [...withoutCurrent, updatedEmailItem],
+            };
+          }
+          return withoutCurrent.length !== (ct.emails || []).length
+            ? { ...ct, emails: withoutCurrent }
+            : ct;
+        }),
+      })
+    );
 
     state.breadcrumbs = state.breadcrumbs.map((seg) =>
       seg.entityType === 'email_contacto' && seg.entityId === emailId
@@ -26823,6 +26953,11 @@ function bindAuthenticatedEvents(): void {
           }
         );
 
+        const targetActiveVerId =
+          targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+          targetCert.id_certificado_version ||
+          '';
+
         if (rpcError) {
           if (isMissingTableOrSchemaError(rpcError)) {
             if (isCreating) {
@@ -26831,6 +26966,9 @@ function bindAuthenticatedEvents(): void {
                 .insert({
                   id: savedId,
                   id_certificado: norm.id_certificado,
+                  ...(STRICT_UUID_PATTERN.test(targetActiveVerId)
+                    ? { id_certificado_version: targetActiveVerId }
+                    : {}),
                   id_requisito: norm.id_requisito,
                   justificacion: norm.justificacion,
                 });
@@ -26880,9 +27018,14 @@ function bindAuthenticatedEvents(): void {
       }
     }
 
+    const activeVerForSavedExclusion =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
     const savedExclusion: NonApplicableRequirementEntity = {
       id: savedId,
       id_certificado: targetCert.id,
+      ...(activeVerForSavedExclusion ? { id_certificado_version: activeVerForSavedExclusion } : {}),
       id_requisito: norm.id_requisito,
       requisito_codigo: norm.requisito_codigo,
       requisito_titulo: norm.requisito_titulo,
@@ -26892,10 +27035,10 @@ function bindAuthenticatedEvents(): void {
 
     const certsPrepared = state.domainData.allCertificadosDetailed.map((c) => {
       if (!isCreating && c.id !== targetCert.id) {
-        return {
+        return syncActiveCertVersionSnapshot({
           ...c,
           noAplicables: (c.noAplicables || []).filter((na) => na.id !== currentId),
-        };
+        });
       }
       return c;
     });
@@ -33065,7 +33208,7 @@ async function confirmArchiveRecord(): Promise<void> {
           if (!targetSite) return cert;
           siteLinks.push({ certId: cert.id, site: targetSite });
           const nextSitios = cert.sitios.filter((s) => s.id !== recordId);
-          return { ...cert, sitios: nextSitios };
+          return syncActiveCertVersionSnapshot({ ...cert, sitios: nextSitios });
         });
       snapshot.siteLinks = siteLinks;
       snapshot.siteLegacy = state.domainData.sites.find((s) => s.id === recordId);
@@ -33095,10 +33238,10 @@ async function confirmArchiveRecord(): Promise<void> {
           const targetProc = cert.procesos.find((p) => p.id === recordId);
           if (!targetProc) return cert;
           procesoLinks.push({ certId: cert.id, proc: targetProc });
-          return {
+          return syncActiveCertVersionSnapshot({
             ...cert,
             procesos: cert.procesos.filter((p) => p.id !== recordId),
-          };
+          });
         });
       snapshot.procesoLinks = procesoLinks;
       snapshot.procLegacy = state.domainData.processes.find((p) => p.id === recordId);
@@ -33128,10 +33271,10 @@ async function confirmArchiveRecord(): Promise<void> {
           const targetNa = (cert.noAplicables || []).find((na) => na.id === recordId);
           if (!targetNa) return cert;
           snapshot.noAplicableLink = { certId: cert.id, item: targetNa };
-          return {
+          return syncActiveCertVersionSnapshot({
             ...cert,
             noAplicables: cert.noAplicables.filter((na) => na.id !== recordId),
-          };
+          });
         });
       if (snapshot.noAplicableLink) {
         refreshCoverageCachesForCert(snapshot.noAplicableLink.certId);
@@ -33151,12 +33294,12 @@ async function confirmArchiveRecord(): Promise<void> {
             cert.fecha_emision,
             cert.fecha_vencimiento
           );
-          return {
+          return syncActiveCertVersionSnapshot({
             ...cert,
             fechas: nextFechas,
             fecha_emision: derivedDates.fecha_emision,
             fecha_vencimiento: derivedDates.fecha_vencimiento,
-          };
+          });
         });
       if (snapshot.fechaLink) {
         const affectedCert = state.domainData.allCertificadosDetailed.find(
@@ -33183,10 +33326,10 @@ async function confirmArchiveRecord(): Promise<void> {
           const targetContacto = (cert.contactos || []).find((ct) => ct.id === recordId);
           if (!targetContacto) return cert;
           snapshot.contactoLink = { certId: cert.id, contacto: targetContacto };
-          return {
+          return syncActiveCertVersionSnapshot({
             ...cert,
             contactos: cert.contactos.filter((ct) => ct.id !== recordId),
-          };
+          });
         });
       break;
     }
@@ -33209,7 +33352,7 @@ async function confirmArchiveRecord(): Promise<void> {
               telefonos: ct.telefonos.filter((t) => t.id !== recordId),
             };
           });
-          return changed ? { ...cert, contactos: nextContactos } : cert;
+          return changed ? syncActiveCertVersionSnapshot({ ...cert, contactos: nextContactos }) : cert;
         });
       break;
     }
@@ -33232,7 +33375,7 @@ async function confirmArchiveRecord(): Promise<void> {
               emails: ct.emails.filter((em) => em.id !== recordId),
             };
           });
-          return changed ? { ...cert, contactos: nextContactos } : cert;
+          return changed ? syncActiveCertVersionSnapshot({ ...cert, contactos: nextContactos }) : cert;
         });
       break;
     }
@@ -34304,7 +34447,7 @@ async function handleRestoreArchivedRecord(
             state.domainData.allCertificadosDetailed.map((cert) => {
               const link = snapshot.siteLinks?.find((l) => l.certId === cert.id);
               if (!link || cert.sitios.some((s) => s.id === recordId)) return cert;
-              return { ...cert, sitios: [...cert.sitios, link.site] };
+              return syncActiveCertVersionSnapshot({ ...cert, sitios: [...cert.sitios, link.site] });
             });
           const affectedCertIds = new Set(snapshot.siteLinks.map((l) => l.certId));
           state.exploration.records = state.exploration.records.map((rec) => {
@@ -34329,7 +34472,10 @@ async function handleRestoreArchivedRecord(
             state.domainData.allCertificadosDetailed.map((cert) => {
               const link = snapshot.procesoLinks?.find((l) => l.certId === cert.id);
               if (!link || cert.procesos.some((p) => p.id === recordId)) return cert;
-              return { ...cert, procesos: [...cert.procesos, link.proc] };
+              return syncActiveCertVersionSnapshot({
+                ...cert,
+                procesos: [...cert.procesos, link.proc],
+              });
             });
           for (const link of snapshot.procesoLinks) {
             refreshCoverageCachesForCert(link.certId);
@@ -34398,12 +34544,12 @@ async function handleRestoreArchivedRecord(
                 cert.fecha_emision,
                 cert.fecha_vencimiento
               );
-              return {
+              return syncActiveCertVersionSnapshot({
                 ...cert,
                 fechas: nextFechas,
                 fecha_emision: derivedDates.fecha_emision,
                 fecha_vencimiento: derivedDates.fecha_vencimiento,
-              };
+              });
             });
           const updatedCert = state.domainData.allCertificadosDetailed.find((c) => c.id === certId);
           if (updatedCert) {
@@ -34427,7 +34573,7 @@ async function handleRestoreArchivedRecord(
           state.domainData.allCertificadosDetailed =
             state.domainData.allCertificadosDetailed.map((cert) =>
               cert.id === certId && !cert.contactos.some((ct) => ct.id === recordId)
-                ? { ...cert, contactos: [...cert.contactos, contacto] }
+                ? syncActiveCertVersionSnapshot({ ...cert, contactos: [...cert.contactos, contacto] })
                 : cert
             );
         }
@@ -34440,14 +34586,14 @@ async function handleRestoreArchivedRecord(
           state.domainData.allCertificadosDetailed =
             state.domainData.allCertificadosDetailed.map((cert) =>
               cert.id === certId
-                ? {
+                ? syncActiveCertVersionSnapshot({
                     ...cert,
                     contactos: cert.contactos.map((ct) =>
                       ct.id === contactoId && !ct.telefonos.some((t) => t.id === recordId)
                         ? { ...ct, telefonos: [...ct.telefonos, telefono] }
                         : ct
                     ),
-                  }
+                  })
                 : cert
             );
         }
@@ -34460,14 +34606,14 @@ async function handleRestoreArchivedRecord(
           state.domainData.allCertificadosDetailed =
             state.domainData.allCertificadosDetailed.map((cert) =>
               cert.id === certId
-                ? {
+                ? syncActiveCertVersionSnapshot({
                     ...cert,
                     contactos: cert.contactos.map((ct) =>
                       ct.id === contactoId && !ct.emails.some((em) => em.id === recordId)
                         ? { ...ct, emails: [...ct.emails, email] }
                         : ct
                     ),
-                  }
+                  })
                 : cert
             );
         }
@@ -37106,13 +37252,14 @@ async function loadDomainData(): Promise<void> {
     state.domainData.requirements = hydratedNormaBundle.requirements;
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map(
-      (cert) => ({
-        ...cert,
-        cobertura: buildCertificateCoberturaCache(
-          cert,
-          hydratedNormaBundle.requirementsCatalog
-        ),
-      })
+      (cert) =>
+        syncActiveCertVersionSnapshot({
+          ...cert,
+          cobertura: buildCertificateCoberturaCache(
+            cert,
+            hydratedNormaBundle.requirementsCatalog
+          ),
+        })
     );
 
     // Process IAF Sectors (with legacy fallback if descripcion column is pending migration)
@@ -38981,6 +39128,10 @@ export async function upsertProcesoPorSitio(
     }
 
     const validTargetCertId = assertValidUuid(targetCert.id, 'certificado de alcance');
+    const activeVerId =
+      targetCert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      targetCert.id_certificado_version ||
+      '';
 
     const validation = validateProcesoPorSitioAssignment(
       validSitioId,
@@ -39044,6 +39195,9 @@ export async function upsertProcesoPorSitio(
               .insert({
                 id: savedLinkId,
                 id_certificado: validTargetCertId,
+                ...(STRICT_UUID_PATTERN.test(activeVerId)
+                  ? { id_certificado_version: activeVerId }
+                  : {}),
                 id_sitio: validSitioId,
                 id_proceso: validProcesoId,
               })
@@ -39072,6 +39226,9 @@ export async function upsertProcesoPorSitio(
           .insert({
             id: savedLinkId,
             id_certificado: validTargetCertId,
+            ...(STRICT_UUID_PATTERN.test(activeVerId)
+              ? { id_certificado_version: activeVerId }
+              : {}),
             id_sitio: validSitioId,
             id_proceso: validProcesoId,
           })
@@ -39097,6 +39254,7 @@ export async function upsertProcesoPorSitio(
     const newLink: ProcesoPorSitioLink = {
       id: savedLinkId,
       id_certificado: validTargetCertId,
+      ...(activeVerId ? { id_certificado_version: activeVerId } : {}),
       id_sitio: validSitioId,
       id_proceso: linkedProceso.id,
       nombre_proceso: linkedProceso.nombre_proceso,
@@ -39108,7 +39266,7 @@ export async function upsertProcesoPorSitio(
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== validTargetCertId) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         sitios: c.sitios.map((s) => {
           if (s.id !== validSitioId) return s;
@@ -39130,7 +39288,7 @@ export async function upsertProcesoPorSitio(
             procesos_vinculados: nextNames,
           };
         }),
-      };
+      });
     });
 
     recordPhase5SessionLog(
@@ -39225,7 +39383,7 @@ export async function archiveProcesoPorSitio(
 
     state.domainData.allCertificadosDetailed = state.domainData.allCertificadosDetailed.map((c) => {
       if (c.id !== currentSitio.id_certificado) return c;
-      return {
+      return syncActiveCertVersionSnapshot({
         ...c,
         sitios: c.sitios.map((s) => {
           if (s.id !== validSitioId) return s;
@@ -39241,7 +39399,7 @@ export async function archiveProcesoPorSitio(
             ),
           };
         }),
-      };
+      });
     });
 
     recordPhase5SessionLog(
