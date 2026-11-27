@@ -33562,7 +33562,7 @@ async function loadArchivedRecordsForAdmin(): Promise<void> {
         .order('deleted_at', { ascending: false }),
       supabase
         .from('alcance_certificado_compartido')
-        .select('id, id_alcance, id_certificado, deleted_at, deleted_by, delete_reason')
+        .select('id, id_alcance, id_certificado, deleted_at, deleted_by')
         .not('deleted_at', 'is', null)
         .order('deleted_at', { ascending: false }),
       supabase
