@@ -188,6 +188,7 @@ export interface ShareProcesoTargetPayload {
 
 export interface SyncProcesoTargetWritePayload {
   id_certificado_destino: string;
+  id_certificado_version?: string | null;
   requisitoIdsToInsert?: ReadonlyArray<string>;
   requisitoIdsToRemove?: ReadonlyArray<string>;
   enableSync?: boolean;
@@ -946,13 +947,34 @@ export async function persistShareProcesos(
       });
     }
 
-    // Paso B: Persist target-certificate clauses strictly scoped by `id_certificado` (and `id_certificado_version` when supplied)
+    // Paso B: Persist target-certificate clauses strictly scoped by `(id_proceso, id_certificado_version, id_requisito)`
     if (link.requisitoIds.length > 0) {
+      let resolvedVerId = link.id_certificado_version;
+      if (!resolvedVerId) {
+        try {
+          const { data: verRow } = await supabase
+            .from('certificado_version')
+            .select('id')
+            .eq('id_certificado', link.id_certificado)
+            .is('deleted_at', null)
+            .order('es_version_actual', { ascending: false })
+            .order('version_numero', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          const candidateId = verRow?.id ? String(verRow.id).trim() : '';
+          if (UUID_REGEX.test(candidateId)) {
+            resolvedVerId = candidateId;
+          }
+        } catch {
+          // Safe fallback: DB trigger fn_guard_req_proceso_against_exclusion resolves active version
+        }
+      }
+
       const reqRows = link.requisitoIds.map((id_requisito) => ({
         id_proceso: link.id_proceso,
         id_certificado: link.id_certificado,
-        ...(link.id_certificado_version
-          ? { id_certificado_version: link.id_certificado_version }
+        ...(resolvedVerId
+          ? { id_certificado_version: resolvedVerId }
           : {}),
         id_requisito,
       }));
@@ -960,9 +982,7 @@ export async function persistShareProcesos(
       const { error: reqErr } = await supabase
         .from('requisitos_por_proceso')
         .upsert(reqRows, {
-          onConflict: link.id_certificado_version
-            ? 'id_proceso,id_certificado_version,id_requisito'
-            : 'id_proceso,id_certificado,id_requisito',
+          onConflict: 'id_proceso,id_certificado_version,id_requisito',
           ignoreDuplicates: true,
         });
 
@@ -1041,6 +1061,10 @@ export async function persistSyncProcesoRequisitos(
       target.id_certificado_destino,
       'certificado destino'
     );
+    const destVersionId =
+      target.id_certificado_version && target.id_certificado_version.trim() !== ''
+        ? assertValidUuid(target.id_certificado_version, 'versión de certificado')
+        : null;
     const seenInsert = new Set<string>();
     const toInsert: string[] = [];
     for (const reqId of target.requisitoIdsToInsert || []) {
@@ -1061,6 +1085,7 @@ export async function persistSyncProcesoRequisitos(
     }
     return {
       id_certificado_destino: destId,
+      id_certificado_version: destVersionId,
       toInsert,
       toRemove,
       enableSync: target.enableSync ?? enableSync,
@@ -1138,16 +1163,38 @@ export async function persistSyncProcesoRequisitos(
       }
     }
 
+    let targetVerId = target.id_certificado_version;
+    if (!targetVerId && (target.toInsert.length > 0 || (mirrorMode && target.toRemove.length > 0))) {
+      try {
+        const { data: verRow } = await supabase
+          .from('certificado_version')
+          .select('id')
+          .eq('id_certificado', target.id_certificado_destino)
+          .is('deleted_at', null)
+          .order('es_version_actual', { ascending: false })
+          .order('version_numero', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const candidateId = verRow?.id ? String(verRow.id).trim() : '';
+        if (UUID_REGEX.test(candidateId)) {
+          targetVerId = candidateId;
+        }
+      } catch {
+        // Safe fallback: trigger fills active version on insert
+      }
+    }
+
     if (target.toInsert.length > 0) {
       const rowsToInsert = target.toInsert.map((id_requisito) => ({
         id_proceso: validProcId,
         id_certificado: target.id_certificado_destino,
+        ...(targetVerId ? { id_certificado_version: targetVerId } : {}),
         id_requisito,
       }));
       const { error: upsertErr } = await supabase
         .from('requisitos_por_proceso')
         .upsert(rowsToInsert, {
-          onConflict: 'id_proceso,id_certificado,id_requisito',
+          onConflict: 'id_proceso,id_certificado_version,id_requisito',
           ignoreDuplicates: true,
         });
 
@@ -1163,10 +1210,13 @@ export async function persistSyncProcesoRequisitos(
     if (mirrorMode && target.toRemove.length > 0) {
       const reqTable = supabase.from('requisitos_por_proceso');
       if (typeof reqTable.delete === 'function') {
-        const baseDelete = reqTable
+        let baseDelete = reqTable
           .delete()
           .eq('id_proceso', validProcId)
           .eq('id_certificado', target.id_certificado_destino);
+        if (targetVerId) {
+          baseDelete = baseDelete.eq('id_certificado_version', targetVerId);
+        }
 
         if (typeof baseDelete.in === 'function') {
           const { error: delErr } = await baseDelete.in(
@@ -1182,11 +1232,14 @@ export async function persistSyncProcesoRequisitos(
           deletedCount += target.toRemove.length;
         } else {
           for (const reqId of target.toRemove) {
-            const { error: delErr } = await reqTable
+            let singleDelete = reqTable
               .delete()
               .eq('id_proceso', validProcId)
-              .eq('id_certificado', target.id_certificado_destino)
-              .eq('id_requisito', reqId);
+              .eq('id_certificado', target.id_certificado_destino);
+            if (targetVerId) {
+              singleDelete = singleDelete.eq('id_certificado_version', targetVerId);
+            }
+            const { error: delErr } = await singleDelete.eq('id_requisito', reqId);
             if (delErr) {
               return {
                 ok: false,
@@ -2173,6 +2226,7 @@ export interface HydrationAssembleParams {
   turnosCompartidosRows: ReadonlyArray<Record<string, unknown>>;
   shiftCatalog: ReadonlyArray<TurnoCatalogItem>;
   formatTurnoTime: (raw: string) => string;
+  activeVersionIdByCertId?: ReadonlyMap<string, string>;
 }
 
 export interface HydrationAssembleResult {
@@ -2214,6 +2268,7 @@ export function assembleSharedCertificateCollections(
     turnosCompartidosRows,
     shiftCatalog,
     formatTurnoTime,
+    activeVersionIdByCertId,
   } = params;
 
   const visibleCertMetaById = new Map<string, VisibleCertMetadata>();
@@ -2360,6 +2415,15 @@ export function assembleSharedCertificateCollections(
     const ownerFallbackCertId = String(rawProcById.get(procId)?.id_certificado || '');
     const reqCertId = rawCertId || ownerFallbackCertId;
     if (!reqCertId) continue;
+
+    const expectedActiveVersionId = activeVersionIdByCertId?.get(reqCertId);
+    const rowVersionId =
+      row.id_certificado_version !== null && row.id_certificado_version !== undefined
+        ? String(row.id_certificado_version).trim()
+        : '';
+    if (expectedActiveVersionId && rowVersionId && rowVersionId !== expectedActiveVersionId) {
+      continue;
+    }
 
     const reqObj = (row.requisito as Record<string, unknown> | null) || null;
     const matchedCatalogReq =

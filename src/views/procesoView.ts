@@ -22,8 +22,9 @@ import {
   computeProcesoBatchSelectionSummary,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
-  filterVisibleCollapsedBatchRows,
+  filterVisibleHierarchyRows,
   getAllSeededNormaRequirements,
+  getDefaultExpandedClauseIds,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
   resolveProcesoDetailMode,
@@ -78,6 +79,7 @@ export interface ProcesoViewState {
   batchMode?: ProcesoBatchMode;
   selectedBatchRequisitoIds?: string[];
   expandedBatchClauseIds?: string[];
+  searchExpandedBatchClauseIds?: string[];
   childSortState?: Partial<Record<ProcesoChildTab, SortState>>;
 }
 
@@ -139,6 +141,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
       ? resolveProcesoDetailById({
           procesoId: incomingProceso.id,
           activeCertId: contextCertId,
+          activeCertVersionId: props.activeCertVersionId,
           certificates,
           programacionAudits,
           phase5Findings,
@@ -765,7 +768,10 @@ export function renderProcesoView(props: ProcesoViewProps): string {
               batchMode: state.batchMode || 'mandatory',
               batchFilterQuery: state.batchFilterQuery || '',
               selectedBatchRequisitoIds: state.selectedBatchRequisitoIds || [],
-              expandedBatchClauseIds: state.expandedBatchClauseIds || [],
+              expandedBatchClauseIds:
+                (state.batchFilterQuery || '').trim().length > 0
+                  ? state.searchExpandedBatchClauseIds
+                  : state.expandedBatchClauseIds,
               sortState: state.childSortState?.requisitos || DEFAULT_PROCESO_CHILD_SORT,
               columnWidths: tableColumnWidths?.['proceso-tab-requisitos'],
             });
@@ -945,13 +951,14 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
   expandedBatchClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
   filterQuery?: string;
 }): string {
-  const { rows, selectedIdSet, expandedBatchClauseIds, filterQuery = '' } = params;
-  const expandedSet =
-    expandedBatchClauseIds instanceof Set
+  const { rows, selectedIdSet, expandedBatchClauseIds } = params;
+  const effectiveExpandedSet =
+    expandedBatchClauseIds === undefined
+      ? new Set(getDefaultExpandedClauseIds(rows))
+      : expandedBatchClauseIds instanceof Set
       ? expandedBatchClauseIds
-      : new Set(expandedBatchClauseIds || []);
-  const hasFilterQuery = filterQuery.trim().length > 0;
-  const visibleRows = filterVisibleCollapsedBatchRows(rows, expandedSet, filterQuery);
+      : new Set(expandedBatchClauseIds);
+  const visibleRows = filterVisibleHierarchyRows(rows, expandedBatchClauseIds);
 
   if (visibleRows.length === 0) {
     return `
@@ -965,9 +972,8 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
     .map((row) => {
       const indentClass = getBatchRowIndentClass(row.indentLevel);
       const isChecked = !row.disabled && selectedIdSet.has(row.req.id);
-      const isCollapsibleLevel2 = row.indentLevel === 2 && row.hasChildren;
-      const isExpanded =
-        isCollapsibleLevel2 && (hasFilterQuery || expandedSet.has(row.req.id));
+      const isCollapsible = row.hasChildren;
+      const isExpanded = isCollapsible && effectiveExpandedSet.has(row.req.id);
 
       const statusBadges: string[] = [];
       if (row.isExcludedByIso43) {
@@ -1003,7 +1009,7 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
           ? `<span class="text-[11px] font-semibold text-indigo-700 shrink-0 whitespace-nowrap">(+${row.mandatorySubtreeCount} subcláusula${row.mandatorySubtreeCount === 1 ? '' : 's'} obligatoria${row.mandatorySubtreeCount === 1 ? '' : 's'})</span>`
           : '';
 
-      const toggleControlHtml = isCollapsibleLevel2
+      const toggleControlHtml = isCollapsible
         ? `
           <button
             type="button"
@@ -1018,9 +1024,7 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
             </svg>
           </button>
         `
-        : row.indentLevel >= 2
-        ? `<span class="w-5 shrink-0" aria-hidden="true"></span>`
-        : '';
+        : `<span class="w-5 shrink-0" aria-hidden="true"></span>`;
 
       const leadText = row.hasTitle
         ? `${row.req.codigo} ${row.titleText}:`
@@ -1118,7 +1122,7 @@ function renderProcesoRequisitosTab(params: {
     batchMode,
     batchFilterQuery,
     selectedBatchRequisitoIds,
-    expandedBatchClauseIds = [],
+    expandedBatchClauseIds,
     sortState,
     columnWidths,
   } = params;

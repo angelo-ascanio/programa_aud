@@ -817,7 +817,8 @@ export function renderCertificacionView(
         archiveErrorMessage: state.noAplicableState?.archiveErrorMessage ?? null,
         clauseFilterQuery: state.noAplicableState?.clauseFilterQuery ?? '',
         clauseMode: state.noAplicableState?.clauseMode ?? 'all',
-        expandedClauseIds: state.noAplicableState?.expandedClauseIds ?? [],
+        expandedClauseIds: state.noAplicableState?.expandedClauseIds,
+        searchExpandedClauseIds: state.noAplicableState?.searchExpandedClauseIds,
       };
 
       contentHtml = renderNoAplicableView({
@@ -892,6 +893,8 @@ export function renderCertificacionView(
         batchFilterQuery: state.procesoState?.batchFilterQuery ?? '',
         batchMode: state.procesoState?.batchMode ?? 'mandatory',
         selectedBatchRequisitoIds: state.procesoState?.selectedBatchRequisitoIds ?? [],
+        expandedBatchClauseIds: state.procesoState?.expandedBatchClauseIds,
+        searchExpandedBatchClauseIds: state.procesoState?.searchExpandedBatchClauseIds,
         childSortState: state.procesoState?.childSortState,
       };
 

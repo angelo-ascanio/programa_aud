@@ -707,6 +707,8 @@ export interface ProcesoBatchPickerRow {
   titleText: string;
   rawText: string;
   indentLevel: number;
+  parentId: string | null;
+  ancestorIds: string[];
   hasChildren: boolean;
   collapsibleLevel2Id: string | null;
   alreadyLinkedToCurrentProceso: boolean;
@@ -719,81 +721,151 @@ export interface ProcesoBatchPickerRow {
   disabled: boolean;
 }
 
+function isPickerRowAncestor<
+  T extends { req: RequisitoLtree; indentLevel: number },
+>(cand: T, row: T): boolean {
+  if (row.indentLevel <= cand.indentLevel) return false;
+  if (row.req.id_requisito_padre && row.req.id_requisito_padre === cand.req.id) {
+    return true;
+  }
+  if (
+    cand.req.ruta_materializada &&
+    row.req.ruta_materializada &&
+    cand.req.ruta_materializada !== row.req.ruta_materializada &&
+    isLtreeSelfOrDescendant(row.req.ruta_materializada, cand.req.ruta_materializada)
+  ) {
+    return true;
+  }
+  const candCode = cand.req.codigo.trim().toLowerCase();
+  const rowCode = row.req.codigo.trim().toLowerCase();
+  return Boolean(candCode && rowCode.startsWith(`${candCode}.`));
+}
+
 /**
- * Annotates ordered hierarchical picker rows so Level-2 sub-clauses (`4.1`, `5.2`, `7.1`, ...)
- * with child rows expose `hasChildren = true` and descendant rows (Level 3+) carry `collapsibleLevel2Id`.
+ * Annotates ordered hierarchical picker rows across ALL indent levels (Chapters `4`,
+ * Level-2 `4.2`/`4.4`, Level-3 `4.4.1`/`8.3.2`, etc.) so every node with descendants
+ * exposes `hasChildren = true` and every descendant carries `parentId` + `ancestorIds`.
  */
-export function annotateCollapsibleLevel2Hierarchy<
+export function annotateHierarchicalPickerRows<
   T extends {
     req: RequisitoLtree;
     indentLevel: number;
+    parentId?: string | null;
+    ancestorIds?: string[];
     hasChildren: boolean;
     collapsibleLevel2Id: string | null;
   },
 >(rows: T[]): T[] {
-  let currentLevel2Row: T | null = null;
+  const stack: T[] = [];
 
   for (const row of rows) {
-    if (row.indentLevel <= 1) {
-      currentLevel2Row = null;
-      row.hasChildren = false;
-      row.collapsibleLevel2Id = null;
-      continue;
+    while (stack.length > 0 && !isPickerRowAncestor(stack[stack.length - 1], row)) {
+      stack.pop();
     }
 
-    if (row.indentLevel === 2) {
-      currentLevel2Row = row;
-      row.hasChildren = false;
-      row.collapsibleLevel2Id = null;
-      continue;
-    }
+    const parent = stack.length > 0 ? stack[stack.length - 1] : null;
+    row.parentId = parent ? parent.req.id : null;
+    row.ancestorIds = stack.map((a) => a.req.id);
+    row.hasChildren = false;
 
-    const parentCodeLower = currentLevel2Row?.req.codigo.trim().toLowerCase() || '';
-    const rowCodeLower = row.req.codigo.trim().toLowerCase();
-    const isDescendantOfLevel2 = Boolean(
-      currentLevel2Row &&
-        ((currentLevel2Row.req.ruta_materializada &&
-          row.req.ruta_materializada &&
-          isLtreeSelfOrDescendant(
-            row.req.ruta_materializada,
-            currentLevel2Row.req.ruta_materializada
-          )) ||
-          (parentCodeLower && rowCodeLower.startsWith(`${parentCodeLower}.`)))
-    );
+    const level2Ancestor =
+      row.indentLevel >= 3
+        ? stack.find((a) => a.indentLevel === 2) || null
+        : null;
+    row.collapsibleLevel2Id = level2Ancestor ? level2Ancestor.req.id : null;
 
-    if (isDescendantOfLevel2 && currentLevel2Row) {
-      currentLevel2Row.hasChildren = true;
-      row.collapsibleLevel2Id = currentLevel2Row.req.id;
-    } else {
-      row.collapsibleLevel2Id = null;
+    if (parent) {
+      parent.hasChildren = true;
     }
+    stack.push(row);
   }
 
   return rows;
 }
 
 /**
- * Filters out collapsed Level-3+ descendants unless their parent Level-2 (`X.Y`) node ID
- * is expanded or an active search filter query is present (auto-expanding search matches).
+ * Backwards-compatible alias delegating to general multi-level hierarchy annotation.
+ */
+export function annotateCollapsibleLevel2Hierarchy<
+  T extends {
+    req: RequisitoLtree;
+    indentLevel: number;
+    parentId?: string | null;
+    ancestorIds?: string[];
+    hasChildren: boolean;
+    collapsibleLevel2Id: string | null;
+  },
+>(rows: T[]): T[] {
+  return annotateHierarchicalPickerRows(rows);
+}
+
+/**
+ * Default expansion state on picker entry: Chapter level (`indentLevel === 1`) with children
+ * starts expanded so Chapters and their Level-2 sub-clauses (`4.1`, `4.4`, `5.2`, ...) are visible,
+ * while Level-2+ nodes (`4.4.1`, `4.2.a`, ...) start collapsed.
+ */
+export function getDefaultExpandedClauseIds<
+  T extends { req: RequisitoLtree; indentLevel: number; hasChildren: boolean },
+>(rows: ReadonlyArray<T>): string[] {
+  return rows
+    .filter((row) => row.indentLevel === 1 && row.hasChildren)
+    .map((row) => row.req.id);
+}
+
+/**
+ * Filters hierarchical picker rows by ancestor expansion state (supporting collapse/expand at ALL levels,
+ * both in normal browsing and while an active search filter is present).
+ */
+export function filterVisibleHierarchyRows<
+  T extends {
+    req: RequisitoLtree;
+    indentLevel: number;
+    hasChildren: boolean;
+    ancestorIds?: string[];
+    collapsibleLevel2Id?: string | null;
+  },
+>(
+  rows: ReadonlyArray<T>,
+  expandedIds?: ReadonlySet<string> | ReadonlyArray<string>
+): T[] {
+  const effectiveExpandedSet =
+    expandedIds === undefined
+      ? new Set(getDefaultExpandedClauseIds(rows))
+      : expandedIds instanceof Set
+      ? expandedIds
+      : new Set(expandedIds);
+
+  return rows.filter((row) => {
+    if (row.ancestorIds && row.ancestorIds.length > 0) {
+      return row.ancestorIds.every((ancId) => effectiveExpandedSet.has(ancId));
+    }
+    if (row.collapsibleLevel2Id) {
+      return effectiveExpandedSet.has(row.collapsibleLevel2Id);
+    }
+    return true;
+  });
+}
+
+/**
+ * Filters collapsed descendant rows using `filterVisibleHierarchyRows` (keeps collapse/expand active even during search).
  */
 export function filterVisibleCollapsedBatchRows<
-  T extends { req: RequisitoLtree; collapsibleLevel2Id?: string | null },
+  T extends {
+    req: RequisitoLtree;
+    indentLevel?: number;
+    hasChildren?: boolean;
+    ancestorIds?: string[];
+    collapsibleLevel2Id?: string | null;
+  },
 >(
   rows: ReadonlyArray<T>,
   expandedIds?: ReadonlySet<string> | ReadonlyArray<string>,
-  filterQuery?: string
+  _filterQuery?: string
 ): T[] {
-  if ((filterQuery || '').trim().length > 0) {
-    return [...rows];
-  }
-  const expandedSet =
-    expandedIds instanceof Set
-      ? expandedIds
-      : new Set(expandedIds || []);
-
-  return rows.filter(
-    (row) => !row.collapsibleLevel2Id || expandedSet.has(row.collapsibleLevel2Id)
-  );
+  const normalizedRows = rows as ReadonlyArray<
+    T & { indentLevel: number; hasChildren: boolean }
+  >;
+  return filterVisibleHierarchyRows(normalizedRows, expandedIds);
 }
 
 export interface BuildProcesoBatchPickerResult {
@@ -878,7 +950,9 @@ export function buildProcesoBatchPickerRows(params: {
   }
 
   const normalizedQuery = normalizeSearchToken(filterQuery);
-  const rows: ProcesoBatchPickerRow[] = [];
+  const queryTokens = normalizedQuery ? normalizedQuery.split(/\s+/).filter(Boolean) : [];
+  const modeRows: ProcesoBatchPickerRow[] = [];
+  const searchBlobById = new Map<string, string>();
 
   for (const req of scopedReqs) {
     const opt = optionById.get(req.id);
@@ -929,40 +1003,41 @@ export function buildProcesoBatchPickerRows(params: {
     const pickerParts = resolveRequisitoPickerTextParts(req);
     const displayTitle = titles.primaryTitle || req.titulo || `Cláusula ${req.codigo}`;
 
-    if (normalizedQuery) {
-      const searchBlob = normalizeSearchToken(
-        [
-          req.codigo,
-          displayTitle,
-          pickerParts.title,
-          pickerParts.rawText,
-          titles.secondaryEnTitle || '',
-          req.titulo || '',
-          req.descripcion || '',
-          req.translations?.es?.title || '',
-          req.translations?.en?.title || '',
-          req.translations?.es?.content_html
-            ? stripHtmlToSearchText(req.translations.es.content_html)
-            : '',
-          req.translations?.en?.content_html
-            ? stripHtmlToSearchText(req.translations.en.content_html)
-            : '',
-        ].join(' ')
+    if (queryTokens.length > 0) {
+      searchBlobById.set(
+        req.id,
+        normalizeSearchToken(
+          [
+            req.codigo,
+            displayTitle,
+            pickerParts.title,
+            pickerParts.rawText,
+            titles.secondaryEnTitle || '',
+            req.titulo || '',
+            req.descripcion || '',
+            req.translations?.es?.title || '',
+            req.translations?.en?.title || '',
+            req.translations?.es?.content_html
+              ? stripHtmlToSearchText(req.translations.es.content_html)
+              : '',
+            req.translations?.en?.content_html
+              ? stripHtmlToSearchText(req.translations.en.content_html)
+              : '',
+          ].join(' ')
+        )
       );
-      const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
-      if (!queryTokens.every((token) => searchBlob.includes(token))) {
-        continue;
-      }
     }
 
     const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-    rows.push({
+    modeRows.push({
       req,
       displayTitle,
       hasTitle: pickerParts.hasTitle,
       titleText: pickerParts.title,
       rawText: pickerParts.rawText,
       indentLevel: Math.max(1, indent.level),
+      parentId: null,
+      ancestorIds: [],
       hasChildren: false,
       collapsibleLevel2Id: null,
       alreadyLinkedToCurrentProceso,
@@ -976,9 +1051,37 @@ export function buildProcesoBatchPickerRows(params: {
     });
   }
 
-  annotateCollapsibleLevel2Hierarchy(rows);
+  annotateHierarchicalPickerRows(modeRows);
 
-  return { rows, scopedReqs, coverageReport };
+  if (queryTokens.length === 0) {
+    return { rows: modeRows, scopedReqs, coverageReport };
+  }
+
+  const directMatchedIds = new Set<string>();
+  for (const row of modeRows) {
+    const blob = searchBlobById.get(row.req.id) || '';
+    if (queryTokens.every((token) => blob.includes(token))) {
+      directMatchedIds.add(row.req.id);
+    }
+  }
+
+  const searchRows = modeRows
+    .filter(
+      (row) =>
+        directMatchedIds.has(row.req.id) ||
+        row.ancestorIds.some((ancId) => directMatchedIds.has(ancId))
+    )
+    .map((row) => ({
+      ...row,
+      parentId: null,
+      ancestorIds: [],
+      hasChildren: false,
+      collapsibleLevel2Id: null,
+    }));
+
+  annotateHierarchicalPickerRows(searchRows);
+
+  return { rows: searchRows, scopedReqs, coverageReport };
 }
 
 /**
@@ -1250,6 +1353,7 @@ export function canArchiveProceso(params: {
 export function resolveProcesoDetailById(params: {
   procesoId: string;
   activeCertId?: string | null;
+  activeCertVersionId?: string | null;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
   programacionAudits: ReadonlyArray<ProgramacionAuditEntity>;
   phase5Findings: ReadonlyArray<Phase5FindingEntity>;
@@ -1259,6 +1363,7 @@ export function resolveProcesoDetailById(params: {
   const {
     procesoId,
     activeCertId = null,
+    activeCertVersionId = null,
     certificates,
     programacionAudits,
     phase5Findings,
@@ -1287,10 +1392,18 @@ export function resolveProcesoDetailById(params: {
       requirementsCatalog,
     });
 
-    // 1. Resolve LTREE requirements linked to this process for `cert.id`
+    // 1. Resolve LTREE requirements linked to this process for `cert.id` (version-qualified first if present)
     const requisitos: ProcesoRequisitoLink[] = [];
     const seenCodes = new Set<string>();
-    const certScopedClauses = matchedProc.requisitos_by_certificado?.[cert.id];
+    const effectiveVersionId =
+      (activeCertVersionId || '').trim() ||
+      cert.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+      cert.id_certificado_version ||
+      '';
+    const versionKey = effectiveVersionId ? `${cert.id}:${effectiveVersionId}` : '';
+    const certScopedClauses =
+      (versionKey ? matchedProc.requisitos_by_certificado?.[versionKey] : undefined) ||
+      matchedProc.requisitos_by_certificado?.[cert.id];
 
     const detailsList = certScopedClauses
       ? certScopedClauses.requisitos_detalle || []

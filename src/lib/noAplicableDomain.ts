@@ -21,7 +21,7 @@ import {
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { orderNormaRequisitosHierarchically } from './normaFullReader';
 import {
-  annotateCollapsibleLevel2Hierarchy,
+  annotateHierarchicalPickerRows,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
 } from './procesoDomain';
@@ -48,6 +48,7 @@ export interface NoAplicableViewState {
   clauseFilterQuery?: string;
   clauseMode?: NoAplicableClauseMode;
   expandedClauseIds?: string[];
+  searchExpandedClauseIds?: string[];
 }
 
 export interface NoAplicableDetailEntity {
@@ -609,6 +610,8 @@ export interface NoAplicablePickerRow {
   titleText: string;
   rawText: string;
   indentLevel: number;
+  parentId: string | null;
+  ancestorIds: string[];
   hasChildren: boolean;
   collapsibleLevel2Id: string | null;
   isDuplicateExclusion: boolean;
@@ -619,8 +622,8 @@ export interface NoAplicablePickerRow {
 
 /**
  * Builds hierarchically ordered collapsible picker rows for `noAplicableView.ts`
- * mirroring the process requirement picker layout (search, mode filter, collapsible `X.Y` nodes,
- * and clean `code + title : rawText` truncation).
+ * mirroring the process requirement picker layout (search retaining ancestor subtrees,
+ * mode filter, multi-level collapsible nodes, and clean `code + title : rawText` truncation).
  */
 export function buildNoAplicablePickerRows(params: {
   cert?: CertificadoDetailEntity | null;
@@ -652,7 +655,9 @@ export function buildNoAplicablePickerRows(params: {
   });
 
   const normalizedQuery = normalizeSearchToken(filterQuery);
-  const rows: NoAplicablePickerRow[] = [];
+  const queryTokens = normalizedQuery ? normalizedQuery.split(/\s+/).filter(Boolean) : [];
+  const modeRows: NoAplicablePickerRow[] = [];
+  const searchBlobById = new Map<string, string>();
 
   for (const opt of options) {
     const { req, isDuplicateExclusion, activeProcessCount, processNames } = opt;
@@ -668,40 +673,41 @@ export function buildNoAplicablePickerRows(params: {
     const pickerParts = resolveRequisitoPickerTextParts(req);
     const displayTitle = titles.primaryTitle || req.titulo || `Cláusula ${req.codigo}`;
 
-    if (normalizedQuery) {
-      const searchBlob = normalizeSearchToken(
-        [
-          req.codigo,
-          displayTitle,
-          pickerParts.title,
-          pickerParts.rawText,
-          titles.secondaryEnTitle || '',
-          req.titulo || '',
-          req.descripcion || '',
-          req.translations?.es?.title || '',
-          req.translations?.en?.title || '',
-          req.translations?.es?.content_html
-            ? stripHtmlToSearchText(req.translations.es.content_html)
-            : '',
-          req.translations?.en?.content_html
-            ? stripHtmlToSearchText(req.translations.en.content_html)
-            : '',
-        ].join(' ')
+    if (queryTokens.length > 0) {
+      searchBlobById.set(
+        req.id,
+        normalizeSearchToken(
+          [
+            req.codigo,
+            displayTitle,
+            pickerParts.title,
+            pickerParts.rawText,
+            titles.secondaryEnTitle || '',
+            req.titulo || '',
+            req.descripcion || '',
+            req.translations?.es?.title || '',
+            req.translations?.en?.title || '',
+            req.translations?.es?.content_html
+              ? stripHtmlToSearchText(req.translations.es.content_html)
+              : '',
+            req.translations?.en?.content_html
+              ? stripHtmlToSearchText(req.translations.en.content_html)
+              : '',
+          ].join(' ')
+        )
       );
-      const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
-      if (!queryTokens.every((token) => searchBlob.includes(token))) {
-        continue;
-      }
     }
 
     const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
-    rows.push({
+    modeRows.push({
       req,
       displayTitle,
       hasTitle: pickerParts.hasTitle,
       titleText: pickerParts.title,
       rawText: pickerParts.rawText,
       indentLevel: Math.max(1, indent.level),
+      parentId: null,
+      ancestorIds: [],
       hasChildren: false,
       collapsibleLevel2Id: null,
       isDuplicateExclusion,
@@ -711,9 +717,37 @@ export function buildNoAplicablePickerRows(params: {
     });
   }
 
-  annotateCollapsibleLevel2Hierarchy(rows);
+  annotateHierarchicalPickerRows(modeRows);
 
-  return rows;
+  if (queryTokens.length === 0) {
+    return modeRows;
+  }
+
+  const directMatchedIds = new Set<string>();
+  for (const row of modeRows) {
+    const blob = searchBlobById.get(row.req.id) || '';
+    if (queryTokens.every((token) => blob.includes(token))) {
+      directMatchedIds.add(row.req.id);
+    }
+  }
+
+  const searchRows = modeRows
+    .filter(
+      (row) =>
+        directMatchedIds.has(row.req.id) ||
+        row.ancestorIds.some((ancId) => directMatchedIds.has(ancId))
+    )
+    .map((row) => ({
+      ...row,
+      parentId: null,
+      ancestorIds: [],
+      hasChildren: false,
+      collapsibleLevel2Id: null,
+    }));
+
+  annotateHierarchicalPickerRows(searchRows);
+
+  return searchRows;
 }
 
 
