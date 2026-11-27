@@ -30,6 +30,14 @@ import {
   validateAuditorTelefonoDraft,
   validateAuditorEmailDraft,
   validateEvaluacionInSituDraft,
+  normalizeAuditorProfessionLabel,
+  formatShortIsoStandardLabel,
+  extractAuditorComplementarySchemes,
+  formatAuditorContactSummary,
+  summarizeAuditorSectorCoverage,
+  resolveAuditorInSituFacetBucket,
+  buildAuditorSearchableText,
+  type AuditorDetailEntity,
   type CompetenciaAuditorEntity,
 } from './competencyMatrix';
 import { INITIAL_NORMAS, INITIAL_SECTORES_IAF, INITIAL_SUBSECTORES_IAF } from './extraDomain';
@@ -804,3 +812,313 @@ describe('Paso 2.1 - Evaluación In Situ, Clasificación de Experto Técnico y V
     );
   });
 });
+
+describe('Step 3.1 - Auditor Multi View Helpers, List/Grid Rendering & Reactive S_{-k} Facets', () => {
+  const baseTemplate = INITIAL_AUDITORES_DETAILED[0];
+
+  const csvSampleAuditors: AuditorDetailEntity[] = [
+    INITIAL_AUDITORES_DETAILED[0], // KS: ISO 9001/14001/45001, 17.1 & 33.1, Vigente
+    INITIAL_AUDITORES_DETAILED[2], // JRP: ISO 9001, Sector 9 y 38 con Experto tecnico
+    INITIAL_AUDITORES_DETAILED[4], // NF: 2 phones (04126018407 + 02123698762) + Experto tecnico
+    {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000091',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '7137643',
+      profesion: 'INGENIERO EN INFORMACIÓN',
+      titulo_profesional: 'INGENIERO EN INFORMACIÓN',
+      codigo_credencial: 'YC',
+      email: 'yanellys_castellanos@yahoo.com',
+      telefono: '04144843822',
+      esquemas_complementarios: '',
+      sistema_gestion_secundario: '',
+      sin_registro_evaluacion: true,
+      proxima_evaluacion_in_situ_fecha: null,
+      observaciones_evaluacion: 'CONDICIONA A EVALUACIÓN INSITU',
+      observacion_sectores: '',
+      telefonos: [
+        {
+          id: 'tel-yc1',
+          id_auditor: '10000000-0000-0000-0000-000000000091',
+          telefono: '04144843822',
+          tipo_telefono: 'Móvil',
+          es_principal: true,
+          deleted_at: null,
+        },
+      ],
+      emails: [
+        {
+          id: 'em-yc1',
+          id_auditor: '10000000-0000-0000-0000-000000000091',
+          email: 'yanellys_castellanos@yahoo.com',
+          tipo_email: 'Principal',
+          es_principal: true,
+          deleted_at: null,
+        },
+      ],
+      normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015'],
+      normaLinks: [],
+      sectores_iaf: [10, 12, 14, 37],
+      sectorLinks: [],
+      subsectorLinks: [
+        {
+          id_auditor: '10000000-0000-0000-0000-000000000091',
+          id_subsector_iaf: 'da000000-0000-0000-0000-000000000371',
+          id_sector_iaf: 'd0000000-0000-0000-0000-000000000037',
+          sector_numero: 37,
+          subsector_codigo: '37.1',
+          subsector_descripcion: 'Educación',
+        },
+      ],
+      competencias: [],
+      historialAuditorias: [],
+    },
+    {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000092',
+      nombre: 'Yurima Carrillo',
+      siglas: 'YC',
+      cedula_identidad: '12310919',
+      profesion: 'INGENIERO QUÍMICO',
+      titulo_profesional: 'INGENIERO QUÍMICO',
+      codigo_credencial: 'YC',
+      email: 'yurima12.fondonorma@gmail.com',
+      telefono: '04166093375',
+      esquemas_complementarios: '',
+      sistema_gestion_secundario: '',
+      sin_registro_evaluacion: false,
+      proxima_evaluacion_in_situ_fecha: '2027-10-01',
+      observaciones_evaluacion: '',
+      observacion_sectores: '',
+      telefonos: [
+        {
+          id: 'tel-yc2',
+          id_auditor: '10000000-0000-0000-0000-000000000092',
+          telefono: '04166093375',
+          tipo_telefono: 'Móvil',
+          es_principal: true,
+          deleted_at: null,
+        },
+      ],
+      emails: [
+        {
+          id: 'em-yc2',
+          id_auditor: '10000000-0000-0000-0000-000000000092',
+          email: 'yurima12.fondonorma@gmail.com',
+          tipo_email: 'Principal',
+          es_principal: true,
+          deleted_at: null,
+        },
+        {
+          id: 'em-yc2-sec',
+          id_auditor: '10000000-0000-0000-0000-000000000092',
+          email: 'yc.respaldo@fondonorma.org',
+          tipo_email: 'Secundario',
+          es_principal: false,
+          deleted_at: null,
+        },
+      ],
+      normas_acreditadas: ['ISO 9001:2015', 'ISO 14001:2015'],
+      normaLinks: [],
+      sectores_iaf: [10, 12, 14, 37],
+      sectorLinks: [],
+      subsectorLinks: [],
+      competencias: [],
+      historialAuditorias: [],
+    },
+    {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000093',
+      nombre: 'Óscar Ríos',
+      siglas: 'OR',
+      cedula_identidad: '7130716',
+      profesion: 'INGENIERO QUÍMICO',
+      titulo_profesional: 'INGENIERO QUÍMICO',
+      codigo_credencial: 'OR',
+      email: 'oscareriosu@gmail.com',
+      telefono: '04144977127',
+      esquemas_complementarios: 'MARCA',
+      sistema_gestion_secundario: '',
+      sin_registro_evaluacion: true,
+      proxima_evaluacion_in_situ_fecha: null,
+      observaciones_evaluacion: '',
+      observacion_sectores: '',
+      telefonos: [],
+      emails: [],
+      normas_acreditadas: [],
+      normaLinks: [],
+      sectores_iaf: [10, 12, 14, 35],
+      sectorLinks: [],
+      subsectorLinks: [],
+      competencias: [],
+      historialAuditorias: [],
+    },
+    {
+      ...baseTemplate,
+      id: '10000000-0000-0000-0000-000000000094',
+      nombre: 'Karol Yulay Sánchez De Ghiano',
+      siglas: 'KSG',
+      cedula_identidad: '17039885',
+      profesion: 'INGENIERO MECÁNICO',
+      titulo_profesional: 'INGENIERO MECÁNICO',
+      codigo_credencial: 'KSG',
+      email: 'karol.sanchez13@gmail.com',
+      telefono: '04249699059',
+      esquemas_complementarios: 'HACCP',
+      sistema_gestion_secundario: '',
+      sin_registro_evaluacion: true,
+      proxima_evaluacion_in_situ_fecha: null,
+      observaciones_evaluacion: '',
+      observacion_sectores: '',
+      telefonos: [],
+      emails: [],
+      normas_acreditadas: ['ISO 9001:2015'],
+      normaLinks: [],
+      sectores_iaf: [],
+      sectorLinks: [],
+      subsectorLinks: [],
+      competencias: [],
+      historialAuditorias: [],
+    },
+  ];
+
+  it('normalizes professions, ISO short labels, complementary schemes, contacts, and sector coverage', () => {
+    assert.equal(normalizeAuditorProfessionLabel('  INGENIERO   INDUSTRIAL '), 'Ingeniero Industrial');
+    assert.equal(
+      normalizeAuditorProfessionLabel('INGENIERO EN SISTEMAS DE CALIDAD Y AMBIENTE / TSU EN QUÍMICA'),
+      'Ingeniero en Sistemas de Calidad y Ambiente / TSU en Química'
+    );
+    assert.equal(formatShortIsoStandardLabel('ISO 9001:2015'), 'ISO 9001');
+    assert.equal(formatShortIsoStandardLabel('ISO/IEC 27001:2022'), 'ISO 27001');
+
+    assert.deepEqual(
+      extractAuditorComplementarySchemes({
+        esquemas_complementarios: 'MARCA / HACCP',
+        sistema_gestion_secundario: 'marca',
+      }),
+      ['MARCA', 'HACCP']
+    );
+
+    const nfContact = formatAuditorContactSummary(INITIAL_AUDITORES_DETAILED[4]);
+    assert.equal(nfContact.primaryPhone, '04126018407');
+    assert.equal(nfContact.extraPhonesCount, 1);
+    assert.equal(nfContact.primaryEmail, 'nordyfuentes@gmail.com');
+    assert.equal(nfContact.extraEmailsCount, 0);
+
+    const ksgSectors = summarizeAuditorSectorCoverage(csvSampleAuditors[6]);
+    assert.equal(ksgSectors.isEmpty, true);
+    assert.equal(ksgSectors.previewText, 'Sin sectores asignados');
+
+    const ksSectors = summarizeAuditorSectorCoverage(INITIAL_AUDITORES_DETAILED[0]);
+    assert.equal(ksSectors.isEmpty, false);
+    assert.equal(ksSectors.previewText, '17.1, 33.1');
+
+    assert.equal(resolveAuditorInSituFacetBucket(csvSampleAuditors[3]), 'Pendiente / Condicionado');
+    assert.equal(resolveAuditorInSituFacetBucket(csvSampleAuditors[5]), 'S/R');
+  });
+
+  it('indexes phones, secondary emails, schemes, subsectors, and observations in filterAuditors & buildAuditorSearchableText', () => {
+    assert.equal(filterAuditors(csvSampleAuditors, { query: '02123698762' }).length, 1);
+    assert.equal(filterAuditors(csvSampleAuditors, { query: 'yc.respaldo@fondonorma.org' }).length, 1);
+    assert.equal(filterAuditors(csvSampleAuditors, { query: 'MARCA' }).length, 1);
+    assert.equal(filterAuditors(csvSampleAuditors, { query: 'HACCP' }).length, 1);
+    assert.equal(filterAuditors(csvSampleAuditors, { query: '37.1' })[0].cedula_identidad, '7137643');
+    assert.equal(filterAuditors(csvSampleAuditors, { query: '7137643' }).length, 1);
+    assert.equal(filterAuditors(csvSampleAuditors, { query: '12310919' }).length, 1);
+    assert.ok(buildAuditorSearchableText(csvSampleAuditors[1]).includes('Sector 9 y 38'));
+  });
+
+  it('renders 6 balanced List View columns (100% colgroup, 0 buttons in tbody), disambiguates Yurima Carrillo, and passes Zero-UUID', () => {
+    const listHtml = renderAuditorView({
+      profile: ADMIN_TEST_PROFILE,
+      state: {
+        selectedAuditorId: null,
+        activeChildTab: 'competencias',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'list',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isSidebarOpen: true,
+        facetSelections: {},
+      },
+      auditors: csvSampleAuditors,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+
+    assert.ok(listHtml.includes('table-fixed'));
+    const colHeaders = listHtml.match(/data-col-header="[^"]+"/g) ?? [];
+    assert.deepEqual(colHeaders, [
+      'data-col-header="nombre"',
+      'data-col-header="normas_acreditadas"',
+      'data-col-header="sectores_iaf"',
+      'data-col-header="contacto"',
+      'data-col-header="evaluacion_in_situ"',
+      'data-col-header="auditorias_count"',
+    ]);
+
+    const colWidths = [...listHtml.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%;"/g)].map((m) =>
+      Number(m[1])
+    );
+    assert.equal(colWidths.length, 6);
+    assert.ok(Math.abs(colWidths.reduce((a, b) => a + b, 0) - 100) < 0.05);
+
+    const tbodyMatch = listHtml.match(/<tbody[\s\S]*?<\/tbody>/);
+    assert.ok(tbodyMatch);
+    assert.equal(/<button\b/i.test(tbodyMatch[0]), false);
+    assert.ok(tbodyMatch[0].includes('data-action="select-auditor"'));
+
+    // Homonyms disambiguated cleanly
+    assert.ok(listHtml.includes('YC · C.I. 7137643'));
+    assert.ok(listHtml.includes('YC · C.I. 12310919'));
+    // Pending auditor sectors & complementary schemes
+    assert.ok(listHtml.includes('Sin sectores asignados'));
+    assert.ok(listHtml.includes('MARCA'));
+    assert.ok(listHtml.includes('HACCP'));
+    // Multi-contact (+1) counters
+    assert.ok(listHtml.includes('(+1)'));
+    // 5 reactive facets present
+    assert.ok(listHtml.includes('data-facet-group="norma"'));
+    assert.ok(listHtml.includes('data-facet-group="sector_iaf"'));
+    assert.ok(listHtml.includes('data-facet-group="evaluacion_in_situ"'));
+    assert.ok(listHtml.includes('data-facet-group="condicion_sectorial"'));
+    assert.ok(listHtml.includes('data-facet-group="profesion"'));
+    // RBAC + Zero-UUID
+    assert.ok(listHtml.includes('data-action="open-create-auditor"'));
+    assert.equal(assertZeroUuidExposure(listHtml).compliant, true);
+
+    // Grid View cards + AUDITOR read-only RBAC
+    const gridHtml = renderAuditorView({
+      profile: { ...ADMIN_TEST_PROFILE, role: 'AUDITOR' },
+      state: {
+        selectedAuditorId: null,
+        activeChildTab: 'competencias',
+        query: '',
+        selectedCalificacion: 'ALL',
+        selectedStandard: 'ALL',
+        selectedSectorIaf: 'ALL',
+        viewMode: 'grid',
+        sortColumn: null,
+        sortDirection: 'none',
+        isEditingAttributes: false,
+        isSidebarOpen: true,
+        facetSelections: { condicion_sectorial: new Set(['Requiere Experto Técnico']) },
+      },
+      auditors: csvSampleAuditors,
+      normas: INITIAL_NORMAS,
+      sectores: INITIAL_SECTORES_IAF,
+      subsectores: INITIAL_SUBSECTORES_IAF,
+    });
+    assert.equal(gridHtml.includes('data-action="open-create-auditor"'), false);
+    assert.ok(gridHtml.includes('Requiere Experto Técnico'));
+    assert.ok(gridHtml.includes('Mostrando'));
+    assert.equal(assertZeroUuidExposure(gridHtml).compliant, true);
+  });
+});
+

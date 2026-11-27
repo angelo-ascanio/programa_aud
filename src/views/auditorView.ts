@@ -3,13 +3,22 @@ import type { UserProfile } from '../lib/healthCheck';
 import { isApprovedStaffProfile } from '../lib/rbac';
 import {
   AUDITOR_NOMBRE_MAX_LENGTH,
+  buildAuditorSearchableText,
+  classifyAuditorObservacionSector,
   createAuditorDraftFromEntity,
   createEmptyAuditorFormDraft,
+  evaluateAuditorInSituStatus,
+  extractAuditorComplementarySchemes,
+  formatAuditorContactSummary,
+  formatShortIsoStandardLabel,
+  getAuditorInSituStatusVisual,
   getAuditorNormaLinks,
   getAuditorSectorLinks,
   getAuditorSubsectorLinks,
-  getCredentialValidityState,
   getQualificationStatusVisual,
+  normalizeAuditorProfessionLabel,
+  resolveAuditorInSituFacetBucket,
+  summarizeAuditorSectorCoverage,
   type AuditorChildTab,
   type AuditorDetailEntity,
   type AuditorDetailMode,
@@ -136,19 +145,8 @@ export function renderAuditorView(props: AuditorViewProps): string {
   });
 }
 
-function getAuditorValidityStates(auditor: AuditorDetailEntity): string[] {
-  if (!auditor.competencias || auditor.competencias.length === 0) {
-    return ['Vigente'];
-  }
-  const states = new Set<string>();
-  for (const comp of auditor.competencias) {
-    states.add(getCredentialValidityState(comp.fecha_vencimiento));
-  }
-  return Array.from(states);
-}
-
 /**
- * Renders the Universal Multi View Clean List & Grid Directory for Auditores
+ * Renders the Universal Multi View Clean List & Grid Directory for Auditores (Step 3.1)
  */
 function renderAuditorDirectory(props: {
   profile: UserProfile;
@@ -182,44 +180,85 @@ function renderAuditorDirectory(props: {
     return aud.normas_acreditadas;
   };
 
-  const getSectorNumbers = (aud: AuditorDetailEntity): number[] => {
-    const links = getAuditorSectorLinks(aud, sectores);
-    if (links.length > 0) {
-      return links.map((l) => l.sector_numero);
-    }
-    return aud.sectores_iaf;
-  };
-
   const uniqueNormas = Array.from(
     new Set(allAuditors.flatMap((a) => getNormaLabels(a)))
   ).sort((a, b) => a.localeCompare(b, 'es'));
 
+  const uniqueSchemes = Array.from(
+    new Set(allAuditors.flatMap((a) => extractAuditorComplementarySchemes(a)))
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
   const uniqueSectors = Array.from(
-    new Set(allAuditors.flatMap((a) => getSectorNumbers(a)))
+    new Set(
+      allAuditors.flatMap(
+        (a) => summarizeAuditorSectorCoverage(a, sectores, subsectores).sectorNumbers
+      )
+    )
   ).sort((a, b) => a - b);
+
+  const uniqueProfessions = Array.from(
+    new Set(
+      allAuditors
+        .map((a) => normalizeAuditorProfessionLabel(a.profesion || a.titulo_profesional))
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const normaSchemeOptions = [
+    ...uniqueNormas.map((n) => ({ value: n, label: n })),
+    ...uniqueSchemes
+      .filter((s) => !uniqueNormas.includes(s))
+      .map((s) => ({ value: s, label: `${s} (Esquema)` })),
+  ];
 
   const facetCategories: MultiViewFacetCategory<AuditorDetailEntity>[] = [
     {
       id: 'norma',
-      label: 'Norma Calificada',
-      options: uniqueNormas.map((n) => ({ value: n, label: n })),
-      extractValues: (aud) => getNormaLabels(aud),
+      label: 'Norma / Esquema',
+      options: normaSchemeOptions,
+      extractValues: (aud) =>
+        Array.from(new Set([...getNormaLabels(aud), ...extractAuditorComplementarySchemes(aud)])),
     },
     {
       id: 'sector_iaf',
       label: 'Sector IAF',
       options: uniqueSectors.map((s) => ({ value: String(s), label: `Sector IAF ${s}` })),
-      extractValues: (aud) => getSectorNumbers(aud).map((s) => String(s)),
+      extractValues: (aud) =>
+        summarizeAuditorSectorCoverage(aud, sectores, subsectores).sectorNumbers.map(String),
     },
     {
-      id: 'vigencia',
-      label: 'Vigencia de Credenciales',
+      id: 'evaluacion_in_situ',
+      label: 'Evaluación In Situ',
       options: [
         { value: 'Vigente', label: 'Vigente' },
         { value: 'Por Vencer', label: 'Por Vencer' },
         { value: 'Vencido', label: 'Vencido' },
+        { value: 'S/R', label: 'S/R' },
+        { value: 'Pendiente / Condicionado', label: 'Pendiente / Condicionado' },
       ],
-      extractValues: (aud) => getAuditorValidityStates(aud),
+      extractValues: (aud) => [resolveAuditorInSituFacetBucket(aud)],
+    },
+    {
+      id: 'condicion_sectorial',
+      label: 'Condición Sectorial',
+      options: [
+        { value: 'Requiere Experto Técnico', label: 'Requiere Experto Técnico' },
+        { value: 'Sin condicionamiento', label: 'Sin condicionamiento' },
+      ],
+      extractValues: (aud) => [
+        classifyAuditorObservacionSector(aud).requiereExpertoTecnico
+          ? 'Requiere Experto Técnico'
+          : 'Sin condicionamiento',
+      ],
+    },
+    {
+      id: 'profesion',
+      label: 'Profesión',
+      options: uniqueProfessions.map((p) => ({ value: p, label: p })),
+      extractValues: (aud) => {
+        const prof = normalizeAuditorProfessionLabel(aud.profesion || aud.titulo_profesional);
+        return prof ? [prof] : [];
+      },
     },
   ];
 
@@ -232,23 +271,14 @@ function renderAuditorDirectory(props: {
           state.selectedSectorIaf !== 'ALL'
             ? new Set([state.selectedSectorIaf])
             : new Set<string>(),
-        vigencia: new Set<string>(),
+        evaluacion_in_situ: new Set<string>(),
+        condicion_sectorial: new Set<string>(),
+        profesion: new Set<string>(),
       };
 
   const searchOptions = {
     getSearchableText: (aud: AuditorDetailEntity) =>
-      [
-        aud.nombre,
-        aud.codigo_credencial,
-        aud.email,
-        aud.titulo_profesional,
-        aud.categoria_profesional,
-        aud.calificacion,
-        getNormaLabels(aud).join(' '),
-        getSectorNumbers(aud)
-          .map((s) => `Sector ${s}`)
-          .join(' '),
-      ].join(' '),
+      buildAuditorSearchableText(aud, normas, sectores, subsectores),
   };
 
   let filtered = filterRecordsWithFacets(
@@ -268,15 +298,15 @@ function renderAuditorDirectory(props: {
       case 'nombre':
         return aud.nombre;
       case 'codigo_credencial':
-        return aud.codigo_credencial;
+        return aud.siglas || aud.codigo_credencial;
       case 'calificacion':
         return aud.calificacion;
       case 'normas':
       case 'normas_acreditadas':
-        return getNormaLabels(aud).length;
+        return getNormaLabels(aud).length + extractAuditorComplementarySchemes(aud).length;
       case 'sectores':
       case 'sectores_iaf':
-        return getSectorNumbers(aud).length;
+        return summarizeAuditorSectorCoverage(aud, sectores, subsectores).sectorNumbers.length;
       case 'auditorias_count':
         return aud.historialAuditorias.length;
       default:
@@ -292,49 +322,91 @@ function renderAuditorDirectory(props: {
     searchOptions
   );
 
-  // Strict Clean List columns summing strictly to 100% — zero <button>/<a>/<input> inside <td>
+  // Strict 6 balanced Clean List columns summing to 100% — zero <button>/<a>/<input> inside <td>
   const columns: ColumnDefinition<AuditorDetailEntity>[] = [
     {
       id: 'nombre',
       header: 'Auditor',
       sortable: true,
-      defaultWidthPct: 28,
+      defaultWidthPct: 22,
       minWidthPx: 180,
-      renderCell: (auditor) => `
-        <div class="min-w-0">
-          <span class="block font-bold text-slate-900 truncate" title="${escapeHtml(auditor.nombre)}">
-            ${escapeHtml(auditor.nombre)}
-          </span>
-          ${
-            auditor.titulo_profesional
-              ? `<span class="block text-[11px] text-slate-500 truncate">${escapeHtml(auditor.titulo_profesional)}</span>`
-              : ''
-          }
-        </div>
-      `,
+      renderCell: (auditor) => {
+        const siglas = (auditor.siglas || auditor.codigo_credencial || '').trim();
+        const cedula = (auditor.cedula_identidad || '').trim();
+        const identitySub = [siglas, cedula ? `C.I. ${cedula}` : ''].filter(Boolean).join(' · ');
+        const professionLabel = normalizeAuditorProfessionLabel(
+          auditor.profesion || auditor.titulo_profesional
+        );
+        const fullTitle = [auditor.nombre, identitySub, professionLabel].filter(Boolean).join(' — ');
+
+        return `
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(fullTitle)}">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="font-bold text-slate-900 truncate">${escapeHtml(auditor.nombre)}</span>
+            </div>
+            <div class="flex items-center gap-1.5 min-w-0 text-[11px] text-slate-500">
+              ${
+                identitySub
+                  ? `<span class="font-mono font-semibold text-slate-700 shrink-0">${escapeHtml(identitySub)}</span>`
+                  : ''
+              }
+              ${
+                identitySub && professionLabel
+                  ? `<span class="text-slate-300 shrink-0" aria-hidden="true">|</span>`
+                  : ''
+              }
+              ${
+                professionLabel
+                  ? `<span class="truncate">${escapeHtml(professionLabel)}</span>`
+                  : ''
+              }
+            </div>
+          </div>
+        `;
+      },
     },
     {
       id: 'normas_acreditadas',
-      header: 'Normas Acreditadas',
+      header: 'Normas y Esquemas',
       sortable: true,
-      defaultWidthPct: 28,
-      minWidthPx: 150,
+      defaultWidthPct: 17,
+      minWidthPx: 140,
       renderCell: (auditor) => {
         const normaLabels = getNormaLabels(auditor);
-        if (normaLabels.length === 0) {
-          return `<span class="text-slate-400 italic">Sin normas asignadas</span>`;
+        const schemes = extractAuditorComplementarySchemes(auditor);
+        if (normaLabels.length === 0 && schemes.length === 0) {
+          return `<span class="text-slate-400 italic">Sin normas</span>`;
         }
+        const combinedChips: Array<{ label: string; isScheme: boolean }> = [
+          ...normaLabels.map((n) => ({ label: formatShortIsoStandardLabel(n), isScheme: false })),
+          ...schemes.map((s) => ({ label: s, isScheme: true })),
+        ];
+        const maxVisible = 3;
+        const visibleChips = combinedChips.slice(0, maxVisible);
+        const extraCount = combinedChips.length - visibleChips.length;
+        const tooltipParts = [...normaLabels, ...schemes.map((s) => `Esquema: ${s}`)];
         return `
-          <div class="flex flex-wrap gap-1 min-w-0">
-            ${normaLabels
-              .map(
-                (n) => `
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-800 border border-slate-200 whitespace-nowrap">
-                    ${escapeHtml(n)}
-                  </span>
-                `
+          <div class="flex flex-wrap items-center gap-1 min-w-0" title="${escapeHtml(tooltipParts.join(' · '))}">
+            ${visibleChips
+              .map((chip) =>
+                chip.isScheme
+                  ? `
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 whitespace-nowrap">
+                      ${escapeHtml(chip.label)}
+                    </span>
+                  `
+                  : `
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-800 border border-slate-200 whitespace-nowrap">
+                      ${escapeHtml(chip.label)}
+                    </span>
+                  `
               )
               .join('')}
+            ${
+              extraCount > 0
+                ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap tabular-nums">+${extraCount}</span>`
+                : ''
+            }
           </div>
         `;
       },
@@ -343,24 +415,105 @@ function renderAuditorDirectory(props: {
       id: 'sectores_iaf',
       header: 'Sectores IAF',
       sortable: true,
-      defaultWidthPct: 26,
+      defaultWidthPct: 19,
       minWidthPx: 140,
       renderCell: (auditor) => {
-        const sectorNums = getSectorNumbers(auditor);
-        const subsectorCount = getAuditorSubsectorLinks(auditor, subsectores).length;
-        if (sectorNums.length === 0 && subsectorCount === 0) {
-          return `<span class="text-slate-400 italic">Sin sectores IAF</span>`;
+        const summary = summarizeAuditorSectorCoverage(auditor, sectores, subsectores);
+        if (summary.isEmpty) {
+          return `<span class="text-slate-400 italic">Sin sectores asignados</span>`;
         }
-        const sectorsLabel = sectorNums.map((s) => `S${s}`).join(', ');
+        const sectorCount = summary.sectorNumbers.length;
         return `
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold whitespace-nowrap">
-              <span aria-hidden="true">🏭</span>
-              <span>${escapeHtml(sectorsLabel || `${sectorNums.length} sectores`)}</span>
+          <div class="min-w-0 space-y-0.5" title="${escapeHtml(summary.tooltipText)}">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold whitespace-nowrap shrink-0 tabular-nums">
+                ${sectorCount} ${sectorCount === 1 ? 'sector' : 'sectores'}
+              </span>
+              <span class="text-[11px] text-slate-600 font-mono truncate">
+                ${escapeHtml(summary.previewText)}
+              </span>
+            </div>
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'contacto',
+      header: 'Contacto',
+      sortable: false,
+      defaultWidthPct: 19,
+      minWidthPx: 150,
+      renderCell: (auditor) => {
+        const contact = formatAuditorContactSummary(auditor);
+        if (!contact.primaryEmail && !contact.primaryPhone) {
+          return `<span class="text-slate-400 italic">Sin contacto</span>`;
+        }
+        const emailTooltip = contact.allEmails.join(' · ');
+        const phoneTooltip = contact.allPhones.join(' · ');
+        return `
+          <div class="min-w-0 space-y-0.5">
+            ${
+              contact.primaryEmail
+                ? `
+                  <div class="flex items-center gap-1 min-w-0" title="${escapeHtml(emailTooltip)}">
+                    <span class="text-[11px] text-slate-800 truncate">${escapeHtml(contact.primaryEmail)}</span>
+                    ${
+                      contact.extraEmailsCount > 0
+                        ? `<span class="px-1 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0 tabular-nums">(+${contact.extraEmailsCount})</span>`
+                        : ''
+                    }
+                  </div>
+                `
+                : ''
+            }
+            ${
+              contact.primaryPhone
+                ? `
+                  <div class="flex items-center gap-1 min-w-0" title="${escapeHtml(phoneTooltip)}">
+                    <span class="text-[11px] text-slate-500 font-mono truncate">${escapeHtml(contact.primaryPhone)}</span>
+                    ${
+                      contact.extraPhonesCount > 0
+                        ? `<span class="px-1 py-0.2 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0 tabular-nums">(+${contact.extraPhonesCount})</span>`
+                        : ''
+                    }
+                  </div>
+                `
+                : ''
+            }
+          </div>
+        `;
+      },
+    },
+    {
+      id: 'evaluacion_in_situ',
+      header: 'Eval. In Situ',
+      sortable: false,
+      align: 'center',
+      defaultWidthPct: 12,
+      minWidthPx: 110,
+      renderCell: (auditor) => {
+        const status = evaluateAuditorInSituStatus(auditor);
+        const visual = getAuditorInSituStatusVisual(status);
+        const obsClass = classifyAuditorObservacionSector(auditor);
+        const tooltipParts = [`Eval. In Situ: ${status}`];
+        if (auditor.proxima_evaluacion_in_situ_fecha) {
+          tooltipParts.push(`Próx.: ${auditor.proxima_evaluacion_in_situ_fecha}`);
+        }
+        if (obsClass.requiereExpertoTecnico) {
+          tooltipParts.push(
+            `Requiere Experto Técnico${obsClass.textoAlerta ? `: ${obsClass.textoAlerta}` : ''}`
+          );
+        }
+
+        return `
+          <div class="inline-flex items-center justify-center gap-1 max-w-full min-w-0" title="${escapeHtml(tooltipParts.join(' · '))}">
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border min-w-0 max-w-full ${visual.badgeClass}">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0 ${visual.dotClass}"></span>
+              <span class="truncate">${escapeHtml(visual.label)}</span>
             </span>
             ${
-              subsectorCount > 0
-                ? `<span class="text-[11px] text-slate-500 font-medium whitespace-nowrap">${subsectorCount} sub-sec.</span>`
+              obsClass.requiereExpertoTecnico
+                ? `<span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold shrink-0" aria-label="Requiere Experto Técnico" title="${escapeHtml(obsClass.textoAlerta || 'Requiere Experto Técnico')}">⚠</span>`
                 : ''
             }
           </div>
@@ -372,18 +525,17 @@ function renderAuditorDirectory(props: {
       header: 'Auditorías',
       sortable: true,
       align: 'center',
-      defaultWidthPct: 18,
-      minWidthPx: 110,
+      defaultWidthPct: 11,
+      minWidthPx: 105,
       renderCell: (auditor) => {
         const count = auditor.historialAuditorias.length;
         return `
-          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border whitespace-nowrap ${
+          <span class="inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-[11px] font-bold border tabular-nums ${
             count > 0
               ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
               : 'bg-slate-100 text-slate-600 border-slate-200'
-          }">
-            <span class="tabular-nums">${count}</span>
-            <span>${count === 1 ? 'auditoría' : 'auditorías'}</span>
+          }" title="${count} ${count === 1 ? 'auditoría registrada' : 'auditorías registradas'}">
+            ${count}
           </span>
         `;
       },
@@ -391,10 +543,19 @@ function renderAuditorDirectory(props: {
   ];
 
   const renderCard = (auditor: AuditorDetailEntity): string => {
-    const statusVisual = getQualificationStatusVisual(auditor.calificacion);
+    const inSituStatus = evaluateAuditorInSituStatus(auditor);
+    const inSituVisual = getAuditorInSituStatusVisual(inSituStatus);
+    const obsClass = classifyAuditorObservacionSector(auditor);
     const normaLabels = getNormaLabels(auditor);
-    const sectorLinks = getAuditorSectorLinks(auditor, sectores);
-    const subsectorLinks = getAuditorSubsectorLinks(auditor, subsectores);
+    const schemes = extractAuditorComplementarySchemes(auditor);
+    const sectorSummary = summarizeAuditorSectorCoverage(auditor, sectores, subsectores);
+    const contact = formatAuditorContactSummary(auditor);
+    const siglas = (auditor.siglas || auditor.codigo_credencial || '').trim();
+    const cedula = (auditor.cedula_identidad || '').trim();
+    const professionLabel = normalizeAuditorProfessionLabel(
+      auditor.profesion || auditor.titulo_profesional
+    );
+    const auditCount = auditor.historialAuditorias.length;
 
     return `
       <div
@@ -403,73 +564,105 @@ function renderAuditorDirectory(props: {
         data-action="select-auditor"
         data-auditor-id="${escapeHtml(auditor.id)}"
         aria-label="Abrir detalle de ${escapeHtml(auditor.nombre)}"
-        class="bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-5 shadow-2xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-4 group"
+        class="bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-5 shadow-2xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-3.5 group"
       >
-        <div class="space-y-2">
+        <div class="space-y-1.5">
           <div class="flex items-start justify-between gap-2">
-            <div class="space-y-1 flex-1 min-w-0">
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
               ${
-                auditor.codigo_credencial
-                  ? `
-                    <span class="inline-block font-mono text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                      🪪 ${escapeHtml(auditor.codigo_credencial)}
-                    </span>
-                  `
+                siglas
+                  ? `<span class="inline-block font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 shrink-0">${escapeHtml(siglas)}</span>`
                   : ''
               }
-              <h3 class="text-sm font-bold text-slate-900 group-hover:text-indigo-700 transition-colors truncate">
-                ${escapeHtml(auditor.nombre)}
-              </h3>
               ${
-                auditor.titulo_profesional
-                  ? `<p class="text-xs text-slate-500 line-clamp-1">${escapeHtml(auditor.titulo_profesional)}</p>`
+                cedula
+                  ? `<span class="font-mono text-[11px] text-slate-500 shrink-0">C.I. ${escapeHtml(cedula)}</span>`
                   : ''
               }
             </div>
 
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shrink-0 ${statusVisual.badgeClass}">
-              <span class="w-1.5 h-1.5 rounded-full ${statusVisual.dotClass}"></span>
-              <span>${escapeHtml(statusVisual.label)}</span>
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${inSituVisual.badgeClass}">
+              <span class="w-1.5 h-1.5 rounded-full ${inSituVisual.dotClass}"></span>
+              <span>${escapeHtml(inSituVisual.label)}</span>
             </span>
           </div>
+
+          <h3 class="text-sm font-bold text-slate-900 group-hover:text-indigo-700 transition-colors truncate" title="${escapeHtml(auditor.nombre)}">
+            ${escapeHtml(auditor.nombre)}
+          </h3>
+          <p class="text-xs text-slate-500 truncate" title="${escapeHtml(professionLabel || 'Evaluador ISO/IEC 17021-1')}">
+            ${escapeHtml(professionLabel || 'Evaluador ISO/IEC 17021-1')}
+          </p>
         </div>
 
         <div class="text-xs text-slate-600 bg-slate-50/75 p-3 rounded-lg border border-slate-100 space-y-2">
-          <div>
-            <span class="text-[10px] uppercase font-bold text-slate-400 block mb-1">Normas Acreditadas:</span>
-            <div class="flex flex-wrap gap-1">
-              ${
-                normaLabels.length > 0
-                  ? normaLabels
-                      .map(
-                        (n) => `
-                          <span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-white text-slate-800 border border-slate-200">
-                            📘 ${escapeHtml(n)}
-                          </span>
-                        `
-                      )
-                      .join('')
-                  : '<span class="text-[11px] text-slate-400 italic">Sin normas asignadas</span>'
-              }
-            </div>
+          <div class="flex flex-wrap gap-1">
+            ${
+              normaLabels.length === 0 && schemes.length === 0
+                ? '<span class="text-[11px] text-slate-400 italic">Sin normas asignadas</span>'
+                : `${normaLabels
+                    .map(
+                      (n) => `
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white text-slate-800 border border-slate-200" title="${escapeHtml(n)}">
+                          ${escapeHtml(formatShortIsoStandardLabel(n))}
+                        </span>
+                      `
+                    )
+                    .join('')}${schemes
+                    .map(
+                      (s) => `
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-50 text-teal-800 border border-teal-200">
+                          ${escapeHtml(s)}
+                        </span>
+                      `
+                    )
+                    .join('')}`
+            }
           </div>
 
-          <div class="flex items-center justify-between pt-1 border-t border-slate-200/50">
-            <span class="text-slate-500 text-[11px]">Sectores IAF Calificados:</span>
-            <span class="font-medium text-slate-800 inline-flex items-center gap-1">
-              <span aria-hidden="true">🏭</span>
-              <span>${sectorLinks.length} sectores (${subsectorLinks.length} subsectores)</span>
-            </span>
+          <div class="pt-1.5 border-t border-slate-200/60 flex items-center justify-between gap-2 text-[11px]" title="${escapeHtml(sectorSummary.tooltipText)}">
+            <span class="text-slate-500 shrink-0">Sectores IAF:</span>
+            ${
+              sectorSummary.isEmpty
+                ? `<span class="text-slate-400 italic truncate">Sin sectores asignados</span>`
+                : `<span class="font-mono font-medium text-slate-800 truncate">${escapeHtml(sectorSummary.previewText)}</span>`
+            }
           </div>
         </div>
 
-        <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span class="truncate max-w-[190px]">
-            ${auditor.email ? `✉️ ${escapeHtml(auditor.email)}` : 'Evaluador ISO/IEC 17021-1'}
-          </span>
-          <span class="font-semibold text-slate-700 tabular-nums">
-            ${auditor.historialAuditorias.length} auditoría${auditor.historialAuditorias.length === 1 ? '' : 's'}
-          </span>
+        <div class="pt-2 border-t border-slate-100 space-y-1.5">
+          ${
+            obsClass.requiereExpertoTecnico
+              ? `
+                <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-amber-50 border border-amber-200/80 text-[11px] text-amber-800 min-w-0" title="${escapeHtml(obsClass.textoAlerta || 'Requiere Experto Técnico')}">
+                  <span class="shrink-0 font-bold" aria-hidden="true">⚠</span>
+                  <span class="truncate">Requiere Experto Técnico${obsClass.sectoresCondicionados.length > 0 ? ` (S${obsClass.sectoresCondicionados.join(', S')})` : ''}</span>
+                </div>
+              `
+              : ''
+          }
+          <div class="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+            <div class="min-w-0 flex items-center gap-2 truncate">
+              ${
+                contact.primaryPhone
+                  ? `<span class="font-mono text-slate-600 shrink-0">${escapeHtml(contact.primaryPhone)}${contact.extraPhonesCount > 0 ? ` (+${contact.extraPhonesCount})` : ''}</span>`
+                  : ''
+              }
+              ${
+                contact.primaryEmail
+                  ? `<span class="truncate" title="${escapeHtml(contact.allEmails.join(' · '))}">${escapeHtml(contact.primaryEmail)}${contact.extraEmailsCount > 0 ? ` (+${contact.extraEmailsCount})` : ''}</span>`
+                  : ''
+              }
+              ${
+                !contact.primaryPhone && !contact.primaryEmail
+                  ? `<span class="italic text-slate-400">Sin contacto</span>`
+                  : ''
+              }
+            </div>
+            <span class="font-semibold text-slate-700 tabular-nums shrink-0">
+              ${auditCount} auditoría${auditCount === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
       </div>
     `;
@@ -488,7 +681,8 @@ function renderAuditorDirectory(props: {
       'Cuerpo de evaluadores técnicos calificados bajo ISO/IEC 17021-1:2015 cláusula 7.2 e ISO 19011:2018',
     entityLabel: 'auditores registrados',
     searchQuery: state.query,
-    searchPlaceholder: 'Buscar por nombre, norma o sector IAF... (Presione "/" para enfocar)',
+    searchPlaceholder:
+      "Buscar por nombre, siglas, C.I., profesión, contacto, norma o sector... (Presione '/' para enfocar)",
     searchInputId: 'auditorDirectorySearchInput',
     clearSearchBtnId: 'clearAuditorSearchBtn',
     totalCount: allAuditors.length,

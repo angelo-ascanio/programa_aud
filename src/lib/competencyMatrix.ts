@@ -291,8 +291,35 @@ export interface AuditorFilterCriteria {
   selectedCalificacion?: string;
   selectedStandard?: string;
   selectedSectorIaf?: string;
-  sortColumn?: 'nombre' | 'codigo_credencial' | 'calificacion' | 'normas' | 'sectores' | null;
+  selectedInSituBucket?: string;
+  selectedCondicionSectorial?: string;
+  selectedProfesion?: string;
+  sortColumn?: AuditorSortColumn | null;
   sortDirection?: 'asc' | 'desc' | 'none';
+}
+
+export type AuditorInSituFacetBucket =
+  | 'Vigente'
+  | 'Por Vencer'
+  | 'Vencido'
+  | 'S/R'
+  | 'Pendiente / Condicionado';
+
+export interface AuditorContactSummary {
+  primaryEmail: string;
+  extraEmailsCount: number;
+  allEmails: string[];
+  primaryPhone: string;
+  extraPhonesCount: number;
+  allPhones: string[];
+}
+
+export interface AuditorSectorCoverageSummary {
+  sectorNumbers: number[];
+  subsectorCodes: string[];
+  previewText: string;
+  tooltipText: string;
+  isEmpty: boolean;
 }
 
 /**
@@ -589,6 +616,9 @@ export function filterAuditors(
     selectedCalificacion = 'ALL',
     selectedStandard = 'ALL',
     selectedSectorIaf = 'ALL',
+    selectedInSituBucket = 'ALL',
+    selectedCondicionSectorial = 'ALL',
+    selectedProfesion = 'ALL',
     sortColumn = null,
     sortDirection = 'none',
   } = criteria;
@@ -596,57 +626,30 @@ export function filterAuditors(
   const cleanQuery = normalizeText(query);
 
   const filtered = auditors.filter((auditor) => {
-    // 1. Text Search across Name, Siglas, Cédula, Profesión, Credential, Emails, Phones
+    // 1. Unified full-text search across identity, contacts, norms, schemes, sectors/subsectors, and observations
     if (cleanQuery) {
-      const matchName = normalizeText(auditor.nombre).includes(cleanQuery);
-      const matchSiglas = normalizeText(auditor.siglas).includes(cleanQuery);
-      const matchCedula = normalizeText(auditor.cedula_identidad).includes(cleanQuery);
-      const matchProfesion = normalizeText(auditor.profesion).includes(cleanQuery);
-      const matchEsquemas = normalizeText(auditor.esquemas_complementarios).includes(cleanQuery);
-      const matchSgsSec = normalizeText(auditor.sistema_gestion_secundario).includes(cleanQuery);
-      const matchTitle = normalizeText(auditor.titulo_profesional).includes(cleanQuery);
-      const matchCode = normalizeText(auditor.codigo_credencial).includes(cleanQuery);
-      const matchEmail =
-        normalizeText(auditor.email).includes(cleanQuery) ||
-        (auditor.emails || []).some(
-          (em) => !em.deleted_at && normalizeText(em.email).includes(cleanQuery)
-        );
-      const matchPhone =
-        normalizeText(auditor.telefono).includes(cleanQuery) ||
-        (auditor.telefonos || []).some(
-          (tel) => !tel.deleted_at && normalizeText(tel.telefono).includes(cleanQuery)
-        );
-      const matchBio = normalizeText(auditor.biografia).includes(cleanQuery);
-      if (
-        !matchName &&
-        !matchSiglas &&
-        !matchCedula &&
-        !matchProfesion &&
-        !matchEsquemas &&
-        !matchSgsSec &&
-        !matchTitle &&
-        !matchCode &&
-        !matchEmail &&
-        !matchPhone &&
-        !matchBio
-      ) {
+      const searchable = normalizeText(buildAuditorSearchableText(auditor));
+      if (!searchable.includes(cleanQuery)) {
         return false;
       }
     }
 
-    // 2. Facet: Qualification Status
+    // 2. Facet: Legacy Qualification Status
     if (selectedCalificacion && selectedCalificacion !== 'ALL') {
       if (normalizeText(auditor.calificacion) !== normalizeText(selectedCalificacion)) {
         return false;
       }
     }
 
-    // 3. Facet: Accredited Standard
+    // 3. Facet: Accredited Standard or Complementary Scheme
     if (selectedStandard && selectedStandard !== 'ALL') {
       const normQuery = normalizeText(selectedStandard);
-      const hasStandard = auditor.normas_acreditadas.some((std) =>
-        normalizeText(std).includes(normQuery)
-      );
+      const normsAndSchemes = [
+        ...getAuditorNormaLinks(auditor).map((l) => l.norma_codigo),
+        ...auditor.normas_acreditadas,
+        ...extractAuditorComplementarySchemes(auditor),
+      ];
+      const hasStandard = normsAndSchemes.some((std) => normalizeText(std).includes(normQuery));
       if (!hasStandard) {
         return false;
       }
@@ -655,7 +658,39 @@ export function filterAuditors(
     // 4. Facet: IAF Sector
     if (selectedSectorIaf && selectedSectorIaf !== 'ALL') {
       const targetSector = Number(selectedSectorIaf);
-      if (!auditor.sectores_iaf.includes(targetSector)) {
+      const sectorSet = new Set<number>([
+        ...auditor.sectores_iaf,
+        ...getAuditorSectorLinks(auditor).map((s) => s.sector_numero),
+        ...getAuditorSubsectorLinks(auditor).map((sub) => sub.sector_numero),
+      ]);
+      if (!sectorSet.has(targetSector)) {
+        return false;
+      }
+    }
+
+    // 5. Facet: Eval. In Situ bucket
+    if (selectedInSituBucket && selectedInSituBucket !== 'ALL') {
+      if (resolveAuditorInSituFacetBucket(auditor) !== selectedInSituBucket) {
+        return false;
+      }
+    }
+
+    // 6. Facet: Sector Condition (Experto Técnico)
+    if (selectedCondicionSectorial && selectedCondicionSectorial !== 'ALL') {
+      const condLabel = classifyAuditorObservacionSector(auditor).requiereExpertoTecnico
+        ? 'Requiere Experto Técnico'
+        : 'Sin condicionamiento';
+      if (condLabel !== selectedCondicionSectorial) {
+        return false;
+      }
+    }
+
+    // 7. Facet: Normalized Profession
+    if (selectedProfesion && selectedProfesion !== 'ALL') {
+      const profLabel = normalizeAuditorProfessionLabel(
+        auditor.profesion || auditor.titulo_profesional
+      );
+      if (normalizeText(profLabel) !== normalizeText(selectedProfesion)) {
         return false;
       }
     }
@@ -674,13 +709,31 @@ export function filterAuditors(
       case 'nombre':
         return factor * a.nombre.localeCompare(b.nombre, 'es');
       case 'codigo_credencial':
-        return factor * a.codigo_credencial.localeCompare(b.codigo_credencial, 'es');
+        return factor * (a.siglas || a.codigo_credencial).localeCompare(b.siglas || b.codigo_credencial, 'es');
       case 'calificacion':
         return factor * a.calificacion.localeCompare(b.calificacion, 'es');
       case 'normas':
-        return factor * (a.normas_acreditadas.length - b.normas_acreditadas.length);
+      case 'normas_acreditadas': {
+        const aCount = new Set([
+          ...getAuditorNormaLinks(a).map((l) => l.norma_codigo),
+          ...a.normas_acreditadas,
+          ...extractAuditorComplementarySchemes(a),
+        ]).size;
+        const bCount = new Set([
+          ...getAuditorNormaLinks(b).map((l) => l.norma_codigo),
+          ...b.normas_acreditadas,
+          ...extractAuditorComplementarySchemes(b),
+        ]).size;
+        return factor * (aCount - bCount);
+      }
       case 'sectores':
-        return factor * (a.sectores_iaf.length - b.sectores_iaf.length);
+      case 'sectores_iaf': {
+        const aCount = summarizeAuditorSectorCoverage(a).sectorNumbers.length;
+        const bCount = summarizeAuditorSectorCoverage(b).sectorNumbers.length;
+        return factor * (aCount - bCount);
+      }
+      case 'auditorias_count':
+        return factor * (a.historialAuditorias.length - b.historialAuditorias.length);
       default:
         return 0;
     }
@@ -1494,6 +1547,297 @@ export function classifyAuditorObservacionSector(
     sectoresCondicionados: Array.from(sectorNumbers).sort((a, b) => a - b),
     textoAlerta,
   };
+}
+
+const SPANISH_PROFESSION_LOWER_WORDS = new Set([
+  'de',
+  'del',
+  'en',
+  'y',
+  'e',
+  'o',
+  'a',
+  'la',
+  'las',
+  'el',
+  'los',
+  'para',
+]);
+
+const SPANISH_PROFESSION_ACRONYMS = new Set(['TSU', 'IAF', 'ISO', 'SGC', 'SGA', 'SST', 'TIC']);
+
+export function normalizeAuditorProfessionLabel(raw: string | null | undefined): string {
+  const clean = (raw || '').trim().replace(/\s+/g, ' ');
+  if (!clean) return '';
+
+  const tokens = clean.split(' ');
+  return tokens
+    .map((token, idx) => {
+      if (token === '/' || token === '-' || token === '·') {
+        return token;
+      }
+      const upper = token.toUpperCase();
+      if (SPANISH_PROFESSION_ACRONYMS.has(upper)) {
+        return upper;
+      }
+      const lower = token.toLocaleLowerCase('es');
+      if (idx > 0 && tokens[idx - 1] !== '/' && SPANISH_PROFESSION_LOWER_WORDS.has(lower)) {
+        return lower;
+      }
+      return lower.charAt(0).toLocaleUpperCase('es') + lower.slice(1);
+    })
+    .join(' ');
+}
+
+export function formatShortIsoStandardLabel(normaCodigo: string): string {
+  const clean = (normaCodigo || '').trim().replace(/\s+/g, ' ');
+  if (!clean) return '';
+  return clean
+    .replace(/^ISO\/IEC\s+/i, 'ISO ')
+    .replace(/:\d{4}$/, '')
+    .trim();
+}
+
+export function extractAuditorComplementarySchemes(
+  auditor: Pick<AuditorDetailEntity, 'esquemas_complementarios' | 'sistema_gestion_secundario'>
+): string[] {
+  const rawSources = [auditor.esquemas_complementarios, auditor.sistema_gestion_secundario]
+    .map((val) => (val || '').trim())
+    .filter(Boolean);
+
+  if (rawSources.length === 0) return [];
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const source of rawSources) {
+    const parts = source
+      .split(/[,;/|+\n]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const part of parts) {
+      const upper = normalizeText(part).toUpperCase();
+      if (!upper || upper === 'N/A' || upper === 'NA' || upper === 'NINGUNO' || upper === '-') {
+        continue;
+      }
+      let canonical = part;
+      if (upper.includes('MARCA')) {
+        canonical = 'MARCA';
+      } else if (upper.includes('HACCP')) {
+        canonical = 'HACCP';
+      } else if (upper.includes('FSSC')) {
+        canonical = 'FSSC 22000';
+      }
+      const key = canonical.toUpperCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(canonical);
+      }
+    }
+  }
+
+  return result;
+}
+
+export function formatAuditorContactSummary(
+  auditor: Pick<AuditorDetailEntity, 'telefonos' | 'emails' | 'telefono' | 'email'>
+): AuditorContactSummary {
+  const activeEmails: string[] = [];
+  const seenEmails = new Set<string>();
+
+  const activeEmailObjs = Array.isArray(auditor.emails)
+    ? auditor.emails.filter((e) => !e.deleted_at && Boolean(e.email?.trim()))
+    : [];
+  const orderedEmails = [
+    ...activeEmailObjs.filter((e) => e.es_principal),
+    ...activeEmailObjs.filter((e) => !e.es_principal),
+  ];
+
+  for (const item of orderedEmails) {
+    const trimmed = item.email.trim();
+    const key = trimmed.toLowerCase();
+    if (!seenEmails.has(key)) {
+      seenEmails.add(key);
+      activeEmails.push(trimmed);
+    }
+  }
+
+  const legacyEmail = (auditor.email || '').trim();
+  if (legacyEmail && !seenEmails.has(legacyEmail.toLowerCase())) {
+    seenEmails.add(legacyEmail.toLowerCase());
+    activeEmails.push(legacyEmail);
+  }
+
+  const activePhones: string[] = [];
+  const seenPhones = new Set<string>();
+
+  const activePhoneObjs = Array.isArray(auditor.telefonos)
+    ? auditor.telefonos.filter((t) => !t.deleted_at && Boolean(t.telefono?.trim()))
+    : [];
+  const orderedPhones = [
+    ...activePhoneObjs.filter((t) => t.es_principal),
+    ...activePhoneObjs.filter((t) => !t.es_principal),
+  ];
+
+  for (const item of orderedPhones) {
+    const trimmed = item.telefono.trim();
+    const key = trimmed.replace(/\s+/g, '');
+    if (!seenPhones.has(key)) {
+      seenPhones.add(key);
+      activePhones.push(trimmed);
+    }
+  }
+
+  const legacyPhone = (auditor.telefono || '').trim();
+  if (legacyPhone && !seenPhones.has(legacyPhone.replace(/\s+/g, ''))) {
+    seenPhones.add(legacyPhone.replace(/\s+/g, ''));
+    activePhones.push(legacyPhone);
+  }
+
+  return {
+    primaryEmail: activeEmails[0] || '',
+    extraEmailsCount: Math.max(0, activeEmails.length - 1),
+    allEmails: activeEmails,
+    primaryPhone: activePhones[0] || '',
+    extraPhonesCount: Math.max(0, activePhones.length - 1),
+    allPhones: activePhones,
+  };
+}
+
+export function summarizeAuditorSectorCoverage(
+  auditor: AuditorDetailEntity,
+  sectoresCatalog: ReadonlyArray<{ id: string; sector: number; descripcion: string }> = [],
+  subsectoresCatalog: ReadonlyArray<SubsectorIafCascadeItem> = []
+): AuditorSectorCoverageSummary {
+  const sectorSet = new Set<number>();
+  for (const link of getAuditorSectorLinks(auditor, sectoresCatalog)) {
+    if (Number.isInteger(link.sector_numero) && link.sector_numero > 0) {
+      sectorSet.add(link.sector_numero);
+    }
+  }
+  for (const num of auditor.sectores_iaf || []) {
+    if (Number.isInteger(num) && num > 0) {
+      sectorSet.add(num);
+    }
+  }
+
+  const subsectorCodesSet = new Set<string>();
+  for (const sub of getAuditorSubsectorLinks(auditor, subsectoresCatalog)) {
+    if (Number.isInteger(sub.sector_numero) && sub.sector_numero > 0) {
+      sectorSet.add(sub.sector_numero);
+    }
+    const cleanCode = (sub.subsector_codigo || '').trim();
+    if (cleanCode && cleanCode !== '—') {
+      subsectorCodesSet.add(cleanCode);
+    }
+  }
+
+  const sectorNumbers = Array.from(sectorSet).sort((a, b) => a - b);
+  const subsectorCodes = Array.from(subsectorCodesSet).sort((a, b) =>
+    a.localeCompare(b, 'es', { numeric: true })
+  );
+
+  if (sectorNumbers.length === 0 && subsectorCodes.length === 0) {
+    return {
+      sectorNumbers: [],
+      subsectorCodes: [],
+      previewText: 'Sin sectores asignados',
+      tooltipText: 'Sin sectores IAF asignados',
+      isEmpty: true,
+    };
+  }
+
+  const previewSource =
+    subsectorCodes.length > 0 ? subsectorCodes : sectorNumbers.map((s) => `S${s}`);
+  const maxPreview = 3;
+  const shown = previewSource.slice(0, maxPreview);
+  const remaining = previewSource.length - shown.length;
+  const previewText = remaining > 0 ? `${shown.join(', ')} +${remaining} más` : shown.join(', ');
+
+  const sectorTooltip =
+    sectorNumbers.length > 0
+      ? `Sectores IAF: ${sectorNumbers.map((s) => `S${s}`).join(', ')}`
+      : '';
+  const subsectorTooltip =
+    subsectorCodes.length > 0 ? `Sub-sectores: ${subsectorCodes.join(', ')}` : '';
+  const tooltipText = [sectorTooltip, subsectorTooltip].filter(Boolean).join(' · ');
+
+  return {
+    sectorNumbers,
+    subsectorCodes,
+    previewText,
+    tooltipText,
+    isEmpty: false,
+  };
+}
+
+export function resolveAuditorInSituFacetBucket(
+  auditor: Pick<
+    AuditorDetailEntity,
+    | 'sin_registro_evaluacion'
+    | 'proxima_evaluacion_in_situ_fecha'
+    | 'observaciones_evaluacion'
+    | 'observacion_sectores'
+  >,
+  referenceDate?: string | Date
+): AuditorInSituFacetBucket {
+  const status = evaluateAuditorInSituStatus(auditor, referenceDate);
+  if (status === 'Pendiente Evaluación' || status === 'Condicionado') {
+    return 'Pendiente / Condicionado';
+  }
+  return status;
+}
+
+export function buildAuditorSearchableText(
+  auditor: AuditorDetailEntity,
+  normasCatalog: ReadonlyArray<NormaCatalogRef> = [],
+  sectoresCatalog: ReadonlyArray<{ id: string; sector: number; descripcion: string }> = [],
+  subsectoresCatalog: ReadonlyArray<SubsectorIafCascadeItem> = []
+): string {
+  const normaLinks = getAuditorNormaLinks(auditor, normasCatalog);
+  const sectorLinks = getAuditorSectorLinks(auditor, sectoresCatalog);
+  const subsectorLinks = getAuditorSubsectorLinks(auditor, subsectoresCatalog);
+  const schemes = extractAuditorComplementarySchemes(auditor);
+  const contacts = formatAuditorContactSummary(auditor);
+  const inSituStatus = evaluateAuditorInSituStatus(auditor);
+  const inSituBucket = resolveAuditorInSituFacetBucket(auditor);
+
+  const sectorNums = new Set<number>([
+    ...auditor.sectores_iaf,
+    ...sectorLinks.map((s) => s.sector_numero),
+    ...subsectorLinks.map((sub) => sub.sector_numero),
+  ]);
+
+  const parts: string[] = [
+    auditor.nombre,
+    auditor.siglas,
+    auditor.cedula_identidad,
+    auditor.profesion,
+    auditor.titulo_profesional,
+    auditor.codigo_credencial,
+    auditor.categoria_profesional,
+    auditor.calificacion,
+    auditor.esquemas_complementarios,
+    auditor.sistema_gestion_secundario,
+    auditor.sector_area_evaluado_texto,
+    auditor.observaciones_evaluacion,
+    auditor.observacion_sectores,
+    auditor.biografia,
+    inSituStatus,
+    inSituBucket,
+    ...contacts.allEmails,
+    ...contacts.allPhones,
+    ...normaLinks.map((l) => `${l.norma_codigo} ${l.norma_titulo || ''}`),
+    ...auditor.normas_acreditadas,
+    ...auditor.normas_acreditadas.map((n) => formatShortIsoStandardLabel(n)),
+    ...schemes,
+    ...Array.from(sectorNums).map((n) => `Sector ${n} S${n}`),
+    ...sectorLinks.map((s) => `${s.sector_numero} ${s.sector_descripcion}`),
+    ...subsectorLinks.map((sub) => `${sub.subsector_codigo} ${sub.subsector_descripcion}`),
+  ];
+
+  return parts.filter(Boolean).join(' ');
 }
 
 export function createEmptyAuditorFormDraft(): AuditorFormDraft {

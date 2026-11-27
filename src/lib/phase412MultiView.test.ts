@@ -311,12 +311,14 @@ test('Phase 4.1.2 Batch A3 + Step 3.2: Equipo de Auditores uses Universal Multi 
     'data-col-header="nombre"',
     'data-col-header="normas_acreditadas"',
     'data-col-header="sectores_iaf"',
+    'data-col-header="contacto"',
+    'data-col-header="evaluacion_in_situ"',
     'data-col-header="auditorias_count"',
   ]);
   const colWidths = [...html.matchAll(/<col\b[^>]*style="width:\s*([\d.]+)%;"/g)].map((m) =>
     Number(m[1])
   );
-  assert.equal(colWidths.length, 4);
+  assert.equal(colWidths.length, 6);
   assert.ok(Math.abs(colWidths.reduce((a, b) => a + b, 0) - 100) < 0.05);
   const tbodyMatch = html.match(/<tbody[\s\S]*?<\/tbody>/);
   assert.ok(tbodyMatch, 'Clean list must render tbody');
@@ -324,7 +326,9 @@ test('Phase 4.1.2 Batch A3 + Step 3.2: Equipo de Auditores uses Universal Multi 
   assert.ok(tbodyMatch[0].includes('data-action="select-auditor"'));
   assert.ok(html.includes('data-facet-group="norma"'));
   assert.ok(html.includes('data-facet-group="sector_iaf"'));
-  assert.ok(html.includes('data-facet-group="vigencia"'));
+  assert.ok(html.includes('data-facet-group="evaluacion_in_situ"'));
+  assert.ok(html.includes('data-facet-group="condicion_sectorial"'));
+  assert.ok(html.includes('data-facet-group="profesion"'));
 
   const addHtml = renderAuditorView({
     profile: ADMIN_PROFILE,
