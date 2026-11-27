@@ -429,7 +429,7 @@ function renderProcessHistoryDrawer(
                         <span class="font-bold text-slate-900 truncate">
                           ${escapeHtml(cell.auditType)} · ${escapeHtml(cell.yearLabel)}
                         </span>
-                        <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold border ${visual.badgeClass} shrink-0">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${visual.badgeClass} shrink-0">
                           ${escapeHtml(visual.symbol)} ${escapeHtml(cell.isCurrent ? 'Actual' : cell.isFuture ? 'Futuro' : cell.included ? 'Incluido' : 'Omitido')}
                         </span>
                       </div>
@@ -1153,7 +1153,7 @@ function renderProcesoMultiView(opts: {
             </div>
             ${
               neverAuditedTotal > 0
-                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
+                ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
                 : `<div class="text-[11px] text-slate-500 truncate">${sitesTotal} sitio${
                     sitesTotal === 1 ? '' : 's'
                   }</div>`
@@ -1220,7 +1220,7 @@ function renderProcesoMultiView(opts: {
         <span class="font-semibold text-slate-800">${selectedTotal} / ${eligibleTotal} procesos</span>
         ${
           neverAuditedTotal > 0
-            ? `<span class="px-1.5 py-0.2 rounded bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[10px] whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
+            ? `<span class="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[10px] whitespace-nowrap">⚠️ ${neverAuditedTotal} nunca aud.</span>`
             : ''
         }
       </div>
@@ -1284,7 +1284,7 @@ function renderProcesoMultiView(opts: {
             </div>
             ${
               meta.neverAuditedEligibleCount > 0
-                ? `<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${meta.neverAuditedEligibleCount} nunca aud.</span>`
+                ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200 whitespace-nowrap">⚠️ ${meta.neverAuditedEligibleCount} nunca aud.</span>`
                 : `<div class="text-[10px] text-slate-500 whitespace-nowrap">${meta.configuredSitesCount}/${meta.sitesCount} sitios cubiertos</div>`
             }
           </div>
