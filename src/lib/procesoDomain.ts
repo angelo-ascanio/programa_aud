@@ -17,6 +17,7 @@ import {
   INITIAL_REQUISITOS_LTREE,
   calculateLtreeIndentation,
   getRequisitoBilingualTitles,
+  resolveRequisitoPickerTextParts,
   type RequisitoLtree,
 } from './extraDomain';
 import { translateDatabaseError } from './healthCheck';
@@ -702,7 +703,12 @@ export type ProcesoBatchMode = 'mandatory' | 'pending' | 'all';
 export interface ProcesoBatchPickerRow {
   req: RequisitoLtree;
   displayTitle: string;
+  hasTitle: boolean;
+  titleText: string;
+  rawText: string;
   indentLevel: number;
+  hasChildren: boolean;
+  collapsibleLevel2Id: string | null;
   alreadyLinkedToCurrentProceso: boolean;
   isExcludedByIso43: boolean;
   blockingExclusionCodigo?: string;
@@ -711,6 +717,83 @@ export interface ProcesoBatchPickerRow {
   isMandatory: boolean;
   mandatorySubtreeCount: number;
   disabled: boolean;
+}
+
+/**
+ * Annotates ordered hierarchical picker rows so Level-2 sub-clauses (`4.1`, `5.2`, `7.1`, ...)
+ * with child rows expose `hasChildren = true` and descendant rows (Level 3+) carry `collapsibleLevel2Id`.
+ */
+export function annotateCollapsibleLevel2Hierarchy<
+  T extends {
+    req: RequisitoLtree;
+    indentLevel: number;
+    hasChildren: boolean;
+    collapsibleLevel2Id: string | null;
+  },
+>(rows: T[]): T[] {
+  let currentLevel2Row: T | null = null;
+
+  for (const row of rows) {
+    if (row.indentLevel <= 1) {
+      currentLevel2Row = null;
+      row.hasChildren = false;
+      row.collapsibleLevel2Id = null;
+      continue;
+    }
+
+    if (row.indentLevel === 2) {
+      currentLevel2Row = row;
+      row.hasChildren = false;
+      row.collapsibleLevel2Id = null;
+      continue;
+    }
+
+    const parentCodeLower = currentLevel2Row?.req.codigo.trim().toLowerCase() || '';
+    const rowCodeLower = row.req.codigo.trim().toLowerCase();
+    const isDescendantOfLevel2 = Boolean(
+      currentLevel2Row &&
+        ((currentLevel2Row.req.ruta_materializada &&
+          row.req.ruta_materializada &&
+          isLtreeSelfOrDescendant(
+            row.req.ruta_materializada,
+            currentLevel2Row.req.ruta_materializada
+          )) ||
+          (parentCodeLower && rowCodeLower.startsWith(`${parentCodeLower}.`)))
+    );
+
+    if (isDescendantOfLevel2 && currentLevel2Row) {
+      currentLevel2Row.hasChildren = true;
+      row.collapsibleLevel2Id = currentLevel2Row.req.id;
+    } else {
+      row.collapsibleLevel2Id = null;
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * Filters out collapsed Level-3+ descendants unless their parent Level-2 (`X.Y`) node ID
+ * is expanded or an active search filter query is present (auto-expanding search matches).
+ */
+export function filterVisibleCollapsedBatchRows<
+  T extends { req: RequisitoLtree; collapsibleLevel2Id?: string | null },
+>(
+  rows: ReadonlyArray<T>,
+  expandedIds?: ReadonlySet<string> | ReadonlyArray<string>,
+  filterQuery?: string
+): T[] {
+  if ((filterQuery || '').trim().length > 0) {
+    return [...rows];
+  }
+  const expandedSet =
+    expandedIds instanceof Set
+      ? expandedIds
+      : new Set(expandedIds || []);
+
+  return rows.filter(
+    (row) => !row.collapsibleLevel2Id || expandedSet.has(row.collapsibleLevel2Id)
+  );
 }
 
 export interface BuildProcesoBatchPickerResult {
@@ -843,6 +926,7 @@ export function buildProcesoBatchPickerRows(params: {
     }
 
     const titles = getRequisitoBilingualTitles(req);
+    const pickerParts = resolveRequisitoPickerTextParts(req);
     const displayTitle = titles.primaryTitle || req.titulo || `Cláusula ${req.codigo}`;
 
     if (normalizedQuery) {
@@ -850,6 +934,8 @@ export function buildProcesoBatchPickerRows(params: {
         [
           req.codigo,
           displayTitle,
+          pickerParts.title,
+          pickerParts.rawText,
           titles.secondaryEnTitle || '',
           req.titulo || '',
           req.descripcion || '',
@@ -873,7 +959,12 @@ export function buildProcesoBatchPickerRows(params: {
     rows.push({
       req,
       displayTitle,
+      hasTitle: pickerParts.hasTitle,
+      titleText: pickerParts.title,
+      rawText: pickerParts.rawText,
       indentLevel: Math.max(1, indent.level),
+      hasChildren: false,
+      collapsibleLevel2Id: null,
       alreadyLinkedToCurrentProceso,
       isExcludedByIso43,
       blockingExclusionCodigo,
@@ -884,6 +975,8 @@ export function buildProcesoBatchPickerRows(params: {
       disabled: alreadyLinkedToCurrentProceso || isExcludedByIso43,
     });
   }
+
+  annotateCollapsibleLevel2Hierarchy(rows);
 
   return { rows, scopedReqs, coverageReport };
 }

@@ -815,6 +815,9 @@ export function renderCertificacionView(
         archiveConfirmOpen:
           !isHistoricalCertVersion && Boolean(state.noAplicableState?.archiveConfirmOpen),
         archiveErrorMessage: state.noAplicableState?.archiveErrorMessage ?? null,
+        clauseFilterQuery: state.noAplicableState?.clauseFilterQuery ?? '',
+        clauseMode: state.noAplicableState?.clauseMode ?? 'all',
+        expandedClauseIds: state.noAplicableState?.expandedClauseIds ?? [],
       };
 
       contentHtml = renderNoAplicableView({

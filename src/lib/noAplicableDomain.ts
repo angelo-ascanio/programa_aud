@@ -11,12 +11,24 @@ import {
   type NonApplicableSmartMutationPreview,
   type SmartMutationPrunedLink,
 } from './coverageEngine';
-import type { RequisitoLtree } from './extraDomain';
+import { stripHtmlToSearchText } from './clauseRenderer';
+import {
+  calculateLtreeIndentation,
+  getRequisitoBilingualTitles,
+  resolveRequisitoPickerTextParts,
+  type RequisitoLtree,
+} from './extraDomain';
 import type { CertificadoDetailEntity } from './multisiteSampling';
 import { orderNormaRequisitosHierarchically } from './normaFullReader';
-import { getAllSeededNormaRequirements, getScopedNormaRequirements } from './procesoDomain';
+import {
+  annotateCollapsibleLevel2Hierarchy,
+  getAllSeededNormaRequirements,
+  getScopedNormaRequirements,
+} from './procesoDomain';
+import { normalizeSearchToken } from './searchControls';
 
 export type NoAplicableDetailMode = 'read' | 'add' | 'edit';
+export type NoAplicableClauseMode = 'all' | 'in_use' | 'pending';
 
 export interface NoAplicableFormDraft {
   id_certificado: string;
@@ -33,6 +45,9 @@ export interface NoAplicableViewState {
   editErrorMessage?: string | null;
   archiveConfirmOpen?: boolean;
   archiveErrorMessage?: string | null;
+  clauseFilterQuery?: string;
+  clauseMode?: NoAplicableClauseMode;
+  expandedClauseIds?: string[];
 }
 
 export interface NoAplicableDetailEntity {
@@ -586,4 +601,119 @@ export function groupPrunedLinksByProcess(
     ),
   }));
 }
+
+export interface NoAplicablePickerRow {
+  req: RequisitoLtree;
+  displayTitle: string;
+  hasTitle: boolean;
+  titleText: string;
+  rawText: string;
+  indentLevel: number;
+  hasChildren: boolean;
+  collapsibleLevel2Id: string | null;
+  isDuplicateExclusion: boolean;
+  activeProcessCount: number;
+  processNames: string[];
+  disabled: boolean;
+}
+
+/**
+ * Builds hierarchically ordered collapsible picker rows for `noAplicableView.ts`
+ * mirroring the process requirement picker layout (search, mode filter, collapsible `X.Y` nodes,
+ * and clean `code + title : rawText` truncation).
+ */
+export function buildNoAplicablePickerRows(params: {
+  cert?: CertificadoDetailEntity | null;
+  requirementsCatalog?: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId?: string | null;
+  mode?: NoAplicableClauseMode;
+  filterQuery?: string;
+  archivedNoAplicableIds?: ReadonlySet<string>;
+  archivedProcesoIds?: ReadonlySet<string>;
+}): NoAplicablePickerRow[] {
+  const {
+    cert,
+    requirementsCatalog = getAllSeededNormaRequirements(),
+    currentNoAplicableId = null,
+    mode = 'all',
+    filterQuery = '',
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  } = params;
+
+  if (!cert) return [];
+
+  const options = buildNoAplicableClauseOptions({
+    cert,
+    requirementsCatalog,
+    currentNoAplicableId,
+    archivedNoAplicableIds,
+    archivedProcesoIds,
+  });
+
+  const normalizedQuery = normalizeSearchToken(filterQuery);
+  const rows: NoAplicablePickerRow[] = [];
+
+  for (const opt of options) {
+    const { req, isDuplicateExclusion, activeProcessCount, processNames } = opt;
+
+    if (mode === 'in_use' && activeProcessCount === 0) {
+      continue;
+    }
+    if (mode === 'pending' && (isDuplicateExclusion || activeProcessCount > 0)) {
+      continue;
+    }
+
+    const titles = getRequisitoBilingualTitles(req);
+    const pickerParts = resolveRequisitoPickerTextParts(req);
+    const displayTitle = titles.primaryTitle || req.titulo || `Cláusula ${req.codigo}`;
+
+    if (normalizedQuery) {
+      const searchBlob = normalizeSearchToken(
+        [
+          req.codigo,
+          displayTitle,
+          pickerParts.title,
+          pickerParts.rawText,
+          titles.secondaryEnTitle || '',
+          req.titulo || '',
+          req.descripcion || '',
+          req.translations?.es?.title || '',
+          req.translations?.en?.title || '',
+          req.translations?.es?.content_html
+            ? stripHtmlToSearchText(req.translations.es.content_html)
+            : '',
+          req.translations?.en?.content_html
+            ? stripHtmlToSearchText(req.translations.en.content_html)
+            : '',
+        ].join(' ')
+      );
+      const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+      if (!queryTokens.every((token) => searchBlob.includes(token))) {
+        continue;
+      }
+    }
+
+    const indent = calculateLtreeIndentation(req.ruta_materializada, req.codigo);
+    rows.push({
+      req,
+      displayTitle,
+      hasTitle: pickerParts.hasTitle,
+      titleText: pickerParts.title,
+      rawText: pickerParts.rawText,
+      indentLevel: Math.max(1, indent.level),
+      hasChildren: false,
+      collapsibleLevel2Id: null,
+      isDuplicateExclusion,
+      activeProcessCount,
+      processNames,
+      disabled: isDuplicateExclusion,
+    });
+  }
+
+  annotateCollapsibleLevel2Hierarchy(rows);
+
+  return rows;
+}
+
 

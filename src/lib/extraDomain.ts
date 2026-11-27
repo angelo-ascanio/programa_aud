@@ -3,7 +3,11 @@
  * Aligned with ISO/IEC 17021-1:2015, ISO 19011:2018, and IAF Mandatory Documents.
  */
 import { isValidUuid } from './zeroUuid';
-import { sanitizeClauseHtml, stripHtmlToSearchText } from './clauseRenderer';
+import {
+  extractClausePlainText,
+  sanitizeClauseHtml,
+  stripHtmlToSearchText,
+} from './clauseRenderer';
 
 export interface NormaEntity {
   id: string;
@@ -1005,6 +1009,38 @@ export function getRequisitoBilingualTitles(
     primaryTitle: '',
     secondaryEnTitle: null,
     isUnauthoredTitle: !contentStatus.hasAnyContent,
+  };
+}
+
+export interface RequisitoPickerTextParts {
+  hasTitle: boolean;
+  title: string;
+  rawText: string;
+}
+
+/**
+ * Resolves clause picker display parts:
+ * - `hasTitle = true` -> caller displays `<code> <title>: <rawText>`
+ * - `hasTitle = false` -> caller displays `<code> <rawText>`
+ */
+export function resolveRequisitoPickerTextParts(
+  req: RequisitoLtree
+): RequisitoPickerTextParts {
+  const titles = getRequisitoBilingualTitles(req);
+  const candidateTitle = (titles.primaryTitle || '').trim();
+  const hasTitle =
+    candidateTitle.length > 0 &&
+    !isGenericRequisitoPlaceholderTitle(candidateTitle, req.codigo);
+  const title = hasTitle ? candidateTitle : '';
+  const rawText =
+    extractClausePlainText(req.translations?.es?.content_html) ||
+    extractClausePlainText(req.translations?.en?.content_html) ||
+    extractClausePlainText(req.descripcion || '');
+
+  return {
+    hasTitle,
+    title,
+    rawText,
   };
 }
 

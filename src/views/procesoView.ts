@@ -22,6 +22,7 @@ import {
   computeProcesoBatchSelectionSummary,
   createEmptyProcesoFormDraft,
   createProcesoFormDraftFromEntity,
+  filterVisibleCollapsedBatchRows,
   getAllSeededNormaRequirements,
   getScopedNormaRequirements,
   resolveProcesoDetailById,
@@ -76,6 +77,7 @@ export interface ProcesoViewState {
   batchFilterQuery?: string;
   batchMode?: ProcesoBatchMode;
   selectedBatchRequisitoIds?: string[];
+  expandedBatchClauseIds?: string[];
   childSortState?: Partial<Record<ProcesoChildTab, SortState>>;
 }
 
@@ -763,6 +765,7 @@ export function renderProcesoView(props: ProcesoViewProps): string {
               batchMode: state.batchMode || 'mandatory',
               batchFilterQuery: state.batchFilterQuery || '',
               selectedBatchRequisitoIds: state.selectedBatchRequisitoIds || [],
+              expandedBatchClauseIds: state.expandedBatchClauseIds || [],
               sortState: state.childSortState?.requisitos || DEFAULT_PROCESO_CHILD_SORT,
               columnWidths: tableColumnWidths?.['proceso-tab-requisitos'],
             });
@@ -939,9 +942,18 @@ function getBatchRowIndentClass(level: number): string {
 export function renderProcesoBatchChecklistRowsHtml(params: {
   rows: ReadonlyArray<ProcesoBatchPickerRow>;
   selectedIdSet: ReadonlySet<string>;
+  expandedBatchClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
+  filterQuery?: string;
 }): string {
-  const { rows, selectedIdSet } = params;
-  if (rows.length === 0) {
+  const { rows, selectedIdSet, expandedBatchClauseIds, filterQuery = '' } = params;
+  const expandedSet =
+    expandedBatchClauseIds instanceof Set
+      ? expandedBatchClauseIds
+      : new Set(expandedBatchClauseIds || []);
+  const hasFilterQuery = filterQuery.trim().length > 0;
+  const visibleRows = filterVisibleCollapsedBatchRows(rows, expandedSet, filterQuery);
+
+  if (visibleRows.length === 0) {
     return `
       <div class="p-6 text-center text-xs text-slate-500">
         No se encontraron cláusulas que coincidan con el filtro seleccionado.
@@ -949,10 +961,13 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
     `;
   }
 
-  return rows
+  return visibleRows
     .map((row) => {
       const indentClass = getBatchRowIndentClass(row.indentLevel);
       const isChecked = !row.disabled && selectedIdSet.has(row.req.id);
+      const isCollapsibleLevel2 = row.indentLevel === 2 && row.hasChildren;
+      const isExpanded =
+        isCollapsibleLevel2 && (hasFilterQuery || expandedSet.has(row.req.id));
 
       const statusBadges: string[] = [];
       if (row.isExcludedByIso43) {
@@ -985,47 +1000,77 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
 
       const subtreeHintHtml =
         (row.req.es_padre || row.mandatorySubtreeCount > 0) && row.mandatorySubtreeCount > 0
-          ? `<span class="text-[11px] font-semibold text-indigo-700 shrink-0">(+${row.mandatorySubtreeCount} subcláusula${row.mandatorySubtreeCount === 1 ? '' : 's'} obligatoria${row.mandatorySubtreeCount === 1 ? '' : 's'})</span>`
+          ? `<span class="text-[11px] font-semibold text-indigo-700 shrink-0 whitespace-nowrap">(+${row.mandatorySubtreeCount} subcláusula${row.mandatorySubtreeCount === 1 ? '' : 's'} obligatoria${row.mandatorySubtreeCount === 1 ? '' : 's'})</span>`
           : '';
 
+      const toggleControlHtml = isCollapsibleLevel2
+        ? `
+          <button
+            type="button"
+            data-action="toggle-proceso-batch-node"
+            data-node-id="${escapeHtml(row.req.id)}"
+            aria-expanded="${isExpanded}"
+            title="${isExpanded ? 'Contraer subcláusulas' : 'Desplegar subcláusulas'}"
+            class="w-5 h-5 inline-flex items-center justify-center rounded hover:bg-slate-200/80 text-slate-600 transition-colors cursor-pointer shrink-0"
+          >
+            <svg class="w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        `
+        : row.indentLevel >= 2
+        ? `<span class="w-5 shrink-0" aria-hidden="true"></span>`
+        : '';
+
+      const leadText = row.hasTitle
+        ? `${row.req.codigo} ${row.titleText}:`
+        : row.req.codigo;
+      const tooltipText = row.rawText ? `${leadText} ${row.rawText}` : leadText;
+      const primaryLeadHtml = row.hasTitle
+        ? `<span class="font-bold ${row.disabled ? 'text-slate-500' : 'text-slate-900'}"><span class="font-mono ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
+        : `<span class="font-mono font-bold ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span>`;
+      const rawTextHtml = row.rawText
+        ? ` <span class="font-normal ${row.disabled ? 'text-slate-400' : 'text-slate-500'}">${escapeHtml(row.rawText)}</span>`
+        : '';
+
       return `
-        <label
+        <div
           data-batch-clause-row="true"
           data-requisito-id="${escapeHtml(row.req.id)}"
           data-codigo="${escapeHtml(row.req.codigo)}"
-          class="flex flex-wrap items-center justify-between gap-2 py-2 pr-3 ${indentClass} ${
+          class="flex items-center justify-between gap-2 py-2 pr-3 ${indentClass} ${
             row.disabled
-              ? 'bg-slate-50/70 text-slate-400 cursor-not-allowed opacity-85'
+              ? 'bg-slate-50/70 text-slate-400 opacity-85'
               : isChecked
-              ? 'bg-indigo-50/60 hover:bg-indigo-50 cursor-pointer'
-              : 'hover:bg-slate-50 cursor-pointer'
+              ? 'bg-indigo-50/60 hover:bg-indigo-50'
+              : 'hover:bg-slate-50'
           } transition-colors"
         >
-          <span class="flex items-center gap-2.5 min-w-0 flex-1">
-            <input
-              type="checkbox"
-              name="batch_requisito_id"
-              value="${escapeHtml(row.req.id)}"
-              ${isChecked ? 'checked' : ''}
-              ${row.disabled ? 'disabled' : ''}
-              class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 ${
-                row.disabled ? 'cursor-not-allowed' : 'cursor-pointer'
-              }"
-            />
-            <span class="font-mono text-xs font-bold shrink-0 ${
-              row.disabled ? 'text-slate-500' : 'text-sky-800'
-            }">${escapeHtml(row.req.codigo)}</span>
-            <span class="text-xs font-medium truncate ${
-              row.disabled ? 'text-slate-500' : 'text-slate-900'
-            }" title="${escapeHtml(row.displayTitle)}">${escapeHtml(row.displayTitle)}</span>
-            ${subtreeHintHtml}
-          </span>
+          <div class="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+            ${toggleControlHtml}
+            <label class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden ${row.disabled ? 'cursor-not-allowed' : 'cursor-pointer'}">
+              <input
+                type="checkbox"
+                name="batch_requisito_id"
+                value="${escapeHtml(row.req.id)}"
+                ${isChecked ? 'checked' : ''}
+                ${row.disabled ? 'disabled' : ''}
+                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 ${
+                  row.disabled ? 'cursor-not-allowed' : 'cursor-pointer'
+                }"
+              />
+              <span class="block min-w-0 flex-1 truncate text-xs" title="${escapeHtml(tooltipText)}">
+                ${primaryLeadHtml}${rawTextHtml}
+              </span>
+              ${subtreeHintHtml}
+            </label>
+          </div>
           ${
             statusBadges.length > 0
               ? `<span class="flex flex-wrap items-center gap-1.5 shrink-0">${statusBadges.join('')}</span>`
               : ''
           }
-        </label>
+        </div>
       `;
     })
     .join('');
@@ -1056,6 +1101,7 @@ function renderProcesoRequisitosTab(params: {
   batchMode: ProcesoBatchMode;
   batchFilterQuery: string;
   selectedBatchRequisitoIds: ReadonlyArray<string>;
+  expandedBatchClauseIds?: ReadonlyArray<string>;
   sortState: SortState;
   columnWidths?: Record<string, number>;
 }): string {
@@ -1072,6 +1118,7 @@ function renderProcesoRequisitosTab(params: {
     batchMode,
     batchFilterQuery,
     selectedBatchRequisitoIds,
+    expandedBatchClauseIds = [],
     sortState,
     columnWidths,
   } = params;
@@ -1382,6 +1429,8 @@ function renderProcesoRequisitosTab(params: {
                   ${renderProcesoBatchChecklistRowsHtml({
                     rows: pickerData.rows,
                     selectedIdSet,
+                    expandedBatchClauseIds,
+                    filterQuery: batchFilterQuery,
                   })}
                 </div>
 

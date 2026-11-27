@@ -124,6 +124,32 @@ function decodeHtmlEntities(value: string): string {
     });
 }
 
+/**
+ * Extracts readable plain text from rich clause HTML (preserving original casing and accents),
+ * replacing `{clause_...}` interpolation tokens and block boundaries with single spaces.
+ */
+export function extractClausePlainText(rawHtml: string | null | undefined): string {
+  const input = (rawHtml || '').trim();
+  if (!input) return '';
+
+  let cleaned = input;
+  for (const blockedTag of BLOCKED_CONTENT_TAGS) {
+    const blockRegex = new RegExp(
+      `<${blockedTag}\\b[^>]*>[\\s\\S]*?<\\/${blockedTag}>`,
+      'gi'
+    );
+    cleaned = cleaned.replace(blockRegex, ' ');
+  }
+
+  cleaned = cleaned
+    .replace(CLAUSE_TOKEN_REGEX, ' ')
+    .replace(/<\/(?:p|div|li|tr|th|td|blockquote|h[1-6])>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '');
+
+  return decodeHtmlEntities(cleaned).replace(/\s+/g, ' ').trim();
+}
+
 function parseAttributes(attrText: string): ParsedHtmlAttribute[] {
   const attrs: ParsedHtmlAttribute[] = [];
   const attrPattern =
