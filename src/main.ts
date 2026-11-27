@@ -5974,18 +5974,6 @@ function bindMultiViewDirectoryControls(): void {
           render();
         });
       });
-
-    container
-      .querySelectorAll<HTMLElement>('[data-action="restore-archived-record"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          if (!canInspectArchivedRecords(state.profile)) return;
-          const tableName = btn.dataset.restoreTable as ArchivableTable | undefined;
-          const recordId = btn.dataset.restoreId;
-          if (!tableName || !recordId) return;
-          void handleRestoreArchivedRecord(tableName, recordId);
-        });
-      });
   });
 }
 
@@ -7190,6 +7178,17 @@ function bindAuthenticatedEvents(): void {
   document.getElementById('confirmArchiveModalBtn')?.addEventListener('click', () => {
     void confirmArchiveRecord();
   });
+  document
+    .querySelectorAll<HTMLElement>('[data-action="restore-archived-record"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!canInspectArchivedRecords(state.profile)) return;
+        const tableName = btn.dataset.restoreTable as ArchivableTable | undefined;
+        const recordId = btn.dataset.restoreId;
+        if (!tableName || !recordId) return;
+        void handleRestoreArchivedRecord(tableName, recordId);
+      });
+    });
   document.getElementById('dismissArchiveToastBtn')?.addEventListener('click', () => {
     dismissFloatingToast();
   });
@@ -24885,22 +24884,19 @@ function bindAuthenticatedEvents(): void {
         const aud = state.domainData.allAuditorsDetailed.find((a) => a.id === audId && !a.deleted_at);
         if (!aud) return;
 
-        const nextDraft: AuditorFormDraft = {
-          ...createAuditorDraftFromEntity(aud),
-          sin_registro_evaluacion: true,
-        };
-
         void (async () => {
           if (STRICT_UUID_PATTERN.test(aud.id)) {
-            const saveRes = await saveAuditorProfile(getAuditorSupabaseClient(), {
-              profile: state.profile,
-              auditorId: aud.id,
-              draft: nextDraft,
-              existingAuditors: state.domainData.allAuditorsDetailed,
-            });
-            if (!saveRes.ok) {
+            const { error } = await getAuditorSupabaseClient()
+              .from('auditor')
+              .update({
+                sin_registro_evaluacion: true,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', aud.id)
+              .is('deleted_at', null);
+            if (error) {
               showFloatingToast(
-                saveRes.error || 'No se pudo marcar el auditor como S/R.',
+                translateDatabaseError(error) || 'No se pudo marcar el auditor como S/R.',
                 'warning'
               );
               return;
