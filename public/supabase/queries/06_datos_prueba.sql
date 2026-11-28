@@ -5706,13 +5706,13 @@ ON CONFLICT (id_contacto, id_certificado_version) WHERE deleted_at IS NULL DO UP
 
 INSERT INTO public.proceso (id, id_certificado, id_certificado_version, nombre_proceso, tipo) VALUES
     ('277b91c1-13b4-40b2-8c87-aacda28a1cf9', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Calidad y SHE', 'Medular'),
-    ('2b78cc36-3a6d-4c60-a15f-cc7d5861b9d0', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Aseguramiento de la Calidad, SHE', 'Medular'),
+    ('2b78cc36-3a6d-4c60-a15f-cc7d5861b9d0', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Aseguramiento de la Calidad', 'Medular'),
     ('3df50835-103e-42ac-94aa-5a2e00dc45a2', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Dirección', 'Estratégico'),
     ('d07d97d6-52a4-4d0b-8134-e1ac22b9e30f', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Comunicación', 'De Apoyo'),
-    ('155653f1-6a58-433e-ae34-f717914b544a', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Recursos, Ingeniería técnica', 'De Apoyo'),
+    ('155653f1-6a58-433e-ae34-f717914b544a', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Recursos e Ingeniería técnica', 'De Apoyo'),
     ('e6e080f2-b7bd-493d-959d-5c025b404b17', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Logística Física, Preservación y Despacho', 'Medular'),
     ('ea8d2f87-3b50-42ff-8d25-5eb042a05fd4', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Finanzas y Control', 'Estratégico'),
-    ('25b185b5-9d30-4b9f-938e-51f28166c90d', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Laboratorios de Aseguramiento', 'Medular'),
+    ('25b185b5-9d30-4b9f-938e-51f28166c90d', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Laboratorio de Aseguramiento', 'Medular'),
     ('6251ec94-fb7c-41f0-a1f7-82de11477809', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Servicio Médico Ocupacional', 'De Apoyo'),
     ('c76aef9e-8d19-4c3a-93a6-9f7ad32ad0e6', 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b', '2a36039f-fa67-47aa-b5d3-fd482e165097', 'Recursos Humanos', 'De Apoyo')
 ON CONFLICT (id_certificado_version, LOWER(TRIM(nombre_proceso))) WHERE deleted_at IS NULL DO UPDATE SET
