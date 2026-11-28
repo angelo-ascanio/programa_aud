@@ -198,6 +198,7 @@ const DYNAMIC_IDENTIFIERS = new Set<string>([
 ]);
 
 const TABLES_AUTO_RESOLVING_CERT_VERSION = new Set<string>([
+  'auditoria',
   'fecha_certificado',
   'contacto_certificado',
   'sitio',
@@ -212,12 +213,21 @@ const TABLES_AUTO_RESOLVING_CERT_VERSION = new Set<string>([
 ]);
 
 /**
+ * Columnas con `DEFAULT NOW()` omitidas frecuentemente en `INSERT` históricos (no representan
+ * cambios de negocio cuando el `INSERT` base no las especifica explícitamente).
+ */
+const VOLATILE_OMITTED_DEFAULT_COLUMNS_BY_TABLE: Readonly<Record<string, readonly string[]>> = {
+  client_organization_access: ['fecha_solicitud'],
+  comentarios_por_auditoria: ['timestamp'],
+};
+
+/**
  * Valores por defecto no-nulos definidos en `01_creacion.sql` cuando un `INSERT` omite la columna.
  * Permite evitar falsos positivos en `computeTableSyncDiff` manteniendo detección real cuando cambian.
  */
 const SCHEMA_NON_NULL_DEFAULTS_BY_TABLE: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
   norma: { vigente: true },
-  auditor: { activo: true, evaluacion_in_situ: false },
+  auditor: { sin_registro_evaluacion: false },
   experto_tecnico: { estatus: 'Disponible' },
   grupo_empresarial: { es_individual_auto: false },
   organizacion_version: { es_version_actual: false },
@@ -910,11 +920,16 @@ function normalizeComparableForKey(value: unknown, columnName: string, meta: Sql
     const n = typeof value === 'number' ? value : Number(String(value).trim());
     if (Number.isFinite(n)) return `num:${n}`;
   }
-  if (meta?.dateColumns?.includes(columnName) && typeof value === 'string') {
-    const trimmed = value.trim();
-    if (DATE_ONLY_REGEX.test(trimmed)) return `date:${trimmed}`;
-    const parsed = new Date(trimmed);
-    if (!Number.isNaN(parsed.getTime())) return `date:${parsed.toISOString().slice(0, 10)}`;
+  if (meta?.dateColumns?.includes(columnName)) {
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : `date:${value.toISOString().slice(0, 10)}`;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (DATE_ONLY_REGEX.test(trimmed)) return `date:${trimmed}`;
+      const parsed = new Date(trimmed);
+      if (!Number.isNaN(parsed.getTime())) return `date:${parsed.toISOString().slice(0, 10)}`;
+    }
   }
   const text = String(value).trim();
   return text ? `str:${text.toLowerCase()}` : null;
@@ -1243,7 +1258,9 @@ function parseDeclareScalarBindings(bodyTokens: readonly SqlToken[], bodySql: st
 
 function parseDoBlockStatements(
   stmt: RawStatementSlice,
-  fullSql: string
+  fullSql: string,
+  recordSource: ParsedRecordSource = 'do_block',
+  managedBlockKey?: string
 ): ParsedSeedRecord[] {
   const tokens = stmt.tokens;
   if (tokens.length < 2 || tokens[0].type !== 'word' || tokens[0].upper !== 'DO') {
@@ -1349,7 +1366,14 @@ function parseDoBlockStatements(
       };
 
       for (const bindings of bindingSets) {
-        const parsed = parseInsertStatement(insertSlice, fullSql, 0, 'do_block', undefined, bindings);
+        const parsed = parseInsertStatement(
+          insertSlice,
+          fullSql,
+          0,
+          recordSource,
+          managedBlockKey,
+          bindings
+        );
         results.push(...parsed);
       }
       i = endTokIdx;
@@ -1475,7 +1499,8 @@ export function parseExistingSqlSeedRecords(sqlContent: string): ParsedSqlSeedIn
         upsertParsedRecord(rec);
       }
     } else if (first.upper === 'DO') {
-      const parsedDo = parseDoBlockStatements(stmt, sqlContent);
+      const doRecordSource: ParsedRecordSource = managedKey ? 'managed_sync' : 'do_block';
+      const parsedDo = parseDoBlockStatements(stmt, sqlContent, doRecordSource, managedKey);
       for (const rec of parsedDo) {
         upsertParsedRecord(rec);
       }
@@ -1644,6 +1669,40 @@ function buildComparisonAlignedSeedRows(
       }
     }
 
+    // Alinear columnas con DEFAULT NOW() omitidas en el INSERT base si no fueron editadas en overlay
+    const volatileOmitted = VOLATILE_OMITTED_DEFAULT_COLUMNS_BY_TABLE[tableName];
+    if (volatileOmitted) {
+      for (const col of volatileOmitted) {
+        if (
+          !rec.insertColumns.includes(col) &&
+          !rec.overlayUpdatedColumns.includes(col) &&
+          clone[col] === undefined &&
+          matchedLive[col] !== undefined &&
+          matchedLive[col] !== null
+        ) {
+          clone[col] = matchedLive[col];
+        }
+      }
+    }
+
+    // Alinear plazos NC calculados automáticamente por `trg_auto_calcular_fechas_hallazgo`
+    // cuando el seed base dejó explícitamente NULL y no existe sobrescritura manual posterior
+    if (
+      tableName === 'hallazgo' &&
+      (clone.tipo === 'NC_MAYOR' || clone.tipo === 'NC_MENOR')
+    ) {
+      for (const ncDateCol of ['fecha_limite_plan', 'fecha_limite_cierre'] as const) {
+        if (
+          clone[ncDateCol] === null &&
+          !rec.overlayUpdatedColumns.includes(ncDateCol) &&
+          matchedLive[ncDateCol] !== undefined &&
+          matchedLive[ncDateCol] !== null
+        ) {
+          clone[ncDateCol] = matchedLive[ncDateCol];
+        }
+      }
+    }
+
     // Si la tabla heredó id_certificado_version implícitamente vía trigger y no tenía columna explícita,
     // alinear si ambos son strings no vacíos solo cuando el INSERT base lo omitió
     if (
@@ -1694,6 +1753,21 @@ function extractManagedStatementsByTable(innerSql: string): Map<string, string[]
       tblInfo = readTableIdentifier(tks, 1);
     } else if (tks[0].upper === 'DELETE' && tks[1]?.upper === 'FROM') {
       tblInfo = readTableIdentifier(tks, 2);
+    } else if (tks[0].upper === 'DO') {
+      const dollarTok = tks.find((t) => t.type === 'dollar_string');
+      if (dollarTok) {
+        const bodyLex = lexPostgreSql(decodeDollarQuotedLiteral(dollarTok.raw), 0);
+        const insIdx = bodyLex.tokens.findIndex(
+          (t, idx) =>
+            t.type === 'word' &&
+            t.upper === 'INSERT' &&
+            bodyLex.tokens[idx + 1]?.type === 'word' &&
+            bodyLex.tokens[idx + 1]?.upper === 'INTO'
+        );
+        if (insIdx !== -1) {
+          tblInfo = readTableIdentifier(bodyLex.tokens, insIdx + 2);
+        }
+      }
     }
     if (!tblInfo) continue;
 

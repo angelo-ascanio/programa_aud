@@ -476,6 +476,17 @@ function normalizeComparableValue(
     if (Number.isFinite(n)) return `num:${n}`;
   }
 
+  if (meta?.dateColumns?.includes(columnName)) {
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? '__NULL__' : `date:${value.toISOString().slice(0, 10)}`;
+    }
+    const trimmed = String(value).trim();
+    if (!trimmed) return '__NULL__';
+    if (DATE_ONLY_REGEX.test(trimmed)) return `date:${trimmed}`;
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) return `date:${parsed.toISOString().slice(0, 10)}`;
+  }
+
   if (meta?.jsonColumns?.includes(columnName) || typeof value === 'object') {
     if (value instanceof Date) {
       return Number.isNaN(value.getTime()) ? '__NULL__' : `ts:${value.toISOString()}`;
@@ -486,13 +497,6 @@ function normalizeComparableValue(
     } catch {
       return `str:${String(value).trim()}`;
     }
-  }
-
-  if (meta?.dateColumns?.includes(columnName) && typeof value === 'string') {
-    const trimmed = value.trim();
-    if (DATE_ONLY_REGEX.test(trimmed)) return `date:${trimmed}`;
-    const parsed = new Date(trimmed);
-    if (!Number.isNaN(parsed.getTime())) return `date:${parsed.toISOString().slice(0, 10)}`;
   }
 
   if (columnName === 'deleted_at') {
@@ -542,7 +546,12 @@ function resolveZeroUuidDisplayLabel(
   for (const col of candidates) {
     const raw = row[col];
     if (raw === null || raw === undefined) continue;
-    const text = String(raw).replace(/\s+/g, ' ').trim();
+    const text =
+      raw instanceof Date
+        ? Number.isNaN(raw.getTime())
+          ? ''
+          : raw.toISOString().slice(0, 10)
+        : String(raw).replace(/\s+/g, ' ').trim();
     if (!text || containsRawUuid(text)) continue;
     cleanParts.push(text);
   }
@@ -913,6 +922,100 @@ function buildInsertStatementForRows(
   return `${header}\nON CONFLICT ${conflictClause} DO UPDATE SET\n    ${setClauses.join(',\n    ')};`;
 }
 
+function buildSequentialVersionUpsertDoBlock(
+  tableName: 'certificado_version' | 'organizacion_version',
+  row: SqlRowRecord,
+  cols: readonly string[],
+  meta: SqlSyncTableMetadata | null,
+  mode: 'active' | 'archived'
+): string {
+  const parentCol = tableName === 'certificado_version' ? 'id_certificado' : 'id_organizacion';
+  const idVal = row.id;
+  const parentVal = row[parentCol];
+  const verVal = row.version_numero;
+
+  const updateSetLines: string[] = [];
+  for (const col of cols) {
+    if (col === 'id' || col === parentCol || col === 'version_numero') continue;
+    if (col === 'deleted_at' || col === 'deleted_by' || col === 'delete_reason') continue;
+    updateSetLines.push(
+      `${col} = ${formatSqlLiteral(row[col], { columnName: col, meta })}`
+    );
+  }
+  if (mode === 'active') {
+    updateSetLines.push('deleted_at = NULL', 'deleted_by = NULL');
+    if (tableSupportsDeleteReason(tableName)) {
+      updateSetLines.push('delete_reason = NULL');
+    }
+  } else {
+    updateSetLines.push(
+      `deleted_at = ${formatSqlLiteral(row.deleted_at ?? null, { columnName: 'deleted_at', meta })}`,
+      `deleted_by = ${formatSqlLiteral(row.deleted_by ?? null, { columnName: 'deleted_by', meta })}`
+    );
+    if (tableSupportsDeleteReason(tableName)) {
+      updateSetLines.push(
+        `delete_reason = ${formatSqlLiteral(row.delete_reason ?? null, { columnName: 'delete_reason', meta })}`
+      );
+    }
+  }
+  if (tableSupportsUpdatedAt(tableName)) {
+    updateSetLines.push('updated_at = NOW()');
+  }
+
+  const insertLiterals = cols.map((col) =>
+    formatSqlLiteral(row[col], { columnName: col, meta })
+  );
+  const insertStmt = `INSERT INTO public.${tableName} (${cols.join(', ')}) VALUES\n            (${insertLiterals.join(', ')});`;
+
+  const branches: string[] = [];
+  if (idVal !== null && idVal !== undefined && String(idVal).trim() !== '') {
+    const idLit = formatSqlLiteral(idVal, { columnName: 'id', dataType: 'uuid', meta });
+    branches.push(
+      `IF EXISTS (SELECT 1 FROM public.${tableName} WHERE id = ${idLit}) THEN\n` +
+        `        UPDATE public.${tableName} SET\n` +
+        `            ${updateSetLines.join(',\n            ')}\n` +
+        `        WHERE id = ${idLit};`
+    );
+  }
+  if (
+    parentVal !== null &&
+    parentVal !== undefined &&
+    String(parentVal).trim() !== '' &&
+    verVal !== null &&
+    verVal !== undefined
+  ) {
+    const parentLit = formatSqlLiteral(parentVal, { columnName: parentCol, dataType: 'uuid', meta });
+    const verLit = formatSqlLiteral(verVal, { columnName: 'version_numero', meta });
+    const kw = branches.length > 0 ? 'ELSIF' : 'IF';
+    const idAssign =
+      idVal !== null && idVal !== undefined && String(idVal).trim() !== ''
+        ? [`id = ${formatSqlLiteral(idVal, { columnName: 'id', dataType: 'uuid', meta })}`, ...updateSetLines]
+        : updateSetLines;
+    branches.push(
+      `${kw} EXISTS (SELECT 1 FROM public.${tableName} WHERE ${parentCol} = ${parentLit} AND version_numero = ${verLit} AND deleted_at IS NULL) THEN\n` +
+        `        UPDATE public.${tableName} SET\n` +
+        `            ${idAssign.join(',\n            ')}\n` +
+        `        WHERE ${parentCol} = ${parentLit} AND version_numero = ${verLit} AND deleted_at IS NULL;`
+    );
+  }
+
+  let body: string;
+  if (branches.length > 0) {
+    body = `BEGIN\n    ${branches.join('\n    ')}\n    ELSE\n        ${insertStmt}\n    END IF;\nEND`;
+  } else {
+    body = `BEGIN\n    ${insertStmt}\nEND`;
+  }
+
+  let tag = '$fnver$';
+  let suffix = 1;
+  while (body.includes(tag)) {
+    tag = `$fnver_${suffix}$`;
+    suffix += 1;
+  }
+
+  return `DO ${tag}\n${body} ${tag};`;
+}
+
 function buildUpdateByIdStatement(
   tableName: string,
   row: SqlRowRecord,
@@ -1049,29 +1152,50 @@ export function buildTableSyncStatements<T extends SqlRowRecord>(
     }
   }
 
+  const isSequentialVersionTable =
+    tableName === 'certificado_version' || tableName === 'organizacion_version';
+
   // 2. Inserciones / Upserts idempotentes para filas activas o M:N
   if (activeRowsToUpsert.length > 0 && insertCols.length > 0) {
-    const mode = meta?.kind === 'pure_mn_link' ? 'mn' : 'active';
-    const conflictClause = meta?.conflictClauseActive ?? `(${(meta?.pkColumns ?? ['id']).join(', ')})`;
+    if (isSequentialVersionTable) {
+      for (const row of activeRowsToUpsert) {
+        statements.push(
+          buildSequentialVersionUpsertDoBlock(tableName, row, insertCols, meta, 'active')
+        );
+        inserts += 1;
+      }
+    } else {
+      const mode = meta?.kind === 'pure_mn_link' ? 'mn' : 'active';
+      const conflictClause = meta?.conflictClauseActive ?? `(${(meta?.pkColumns ?? ['id']).join(', ')})`;
 
-    for (let i = 0; i < activeRowsToUpsert.length; i += batchSize) {
-      const chunk = activeRowsToUpsert.slice(i, i + batchSize);
-      statements.push(
-        buildInsertStatementForRows(tableName, chunk, insertCols, conflictClause, meta, mode)
-      );
-      inserts += chunk.length;
+      for (let i = 0; i < activeRowsToUpsert.length; i += batchSize) {
+        const chunk = activeRowsToUpsert.slice(i, i + batchSize);
+        statements.push(
+          buildInsertStatementForRows(tableName, chunk, insertCols, conflictClause, meta, mode)
+        );
+        inserts += chunk.length;
+      }
     }
   }
 
   // 3. Filas archivadas lógicamente (`deleted_at IS NOT NULL`) vía ON CONFLICT (id) DO UPDATE (jamás DELETE)
   if (includeArchivedRows && archivedRows.length > 0 && insertCols.length > 0) {
-    const pkConflict = `(${(meta?.pkColumns ?? ['id']).join(', ')})`;
-    for (let i = 0; i < archivedRows.length; i += batchSize) {
-      const chunk = archivedRows.slice(i, i + batchSize);
-      statements.push(
-        buildInsertStatementForRows(tableName, chunk, insertCols, pkConflict, meta, 'archived')
-      );
-      archivedUpserts += chunk.length;
+    if (isSequentialVersionTable) {
+      for (const row of archivedRows) {
+        statements.push(
+          buildSequentialVersionUpsertDoBlock(tableName, row, insertCols, meta, 'archived')
+        );
+        archivedUpserts += 1;
+      }
+    } else {
+      const pkConflict = `(${(meta?.pkColumns ?? ['id']).join(', ')})`;
+      for (let i = 0; i < archivedRows.length; i += batchSize) {
+        const chunk = archivedRows.slice(i, i + batchSize);
+        statements.push(
+          buildInsertStatementForRows(tableName, chunk, insertCols, pkConflict, meta, 'archived')
+        );
+        archivedUpserts += chunk.length;
+      }
     }
   }
 
