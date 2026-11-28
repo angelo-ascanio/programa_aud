@@ -40,6 +40,12 @@ import type {
   SitioCertLinkDraft,
 } from './sitioShareDomain';
 import { validateAlcanceDraft } from './alcanceDomain';
+import {
+  isOnConflictSpecError,
+  persistRequisitosPorProcesoDelete,
+  persistRequisitosPorProcesoInsert,
+  type ProcesoReqSupabaseLike,
+} from './procesoRequisitosPersistence';
 
 // =============================================================================
 // Strictly Typed Structural Supabase Client Interface (0 `any`)
@@ -979,12 +985,10 @@ export async function persistShareProcesos(
         id_requisito,
       }));
 
-      const { error: reqErr } = await supabase
-        .from('requisitos_por_proceso')
-        .upsert(reqRows, {
-          onConflict: 'id_proceso,id_certificado_version,id_requisito',
-          ignoreDuplicates: true,
-        });
+      const { error: reqErr } = await persistRequisitosPorProcesoInsert(
+        supabase as ProcesoReqSupabaseLike,
+        reqRows
+      );
 
       if (reqErr) {
         const rolledBackLinkIds = await rollbackNewlyCreatedBridgeLinks(
@@ -1105,7 +1109,7 @@ export async function persistSyncProcesoRequisitos(
     );
 
     if (rpcErr) {
-      if (!isMissingRpcFunctionError(rpcErr)) {
+      if (!isMissingRpcFunctionError(rpcErr) && !isOnConflictSpecError(rpcErr)) {
         return {
           ok: false,
           error: translateShareDbError(rpcErr),
@@ -1191,12 +1195,10 @@ export async function persistSyncProcesoRequisitos(
         ...(targetVerId ? { id_certificado_version: targetVerId } : {}),
         id_requisito,
       }));
-      const { error: upsertErr } = await supabase
-        .from('requisitos_por_proceso')
-        .upsert(rowsToInsert, {
-          onConflict: 'id_proceso,id_certificado_version,id_requisito',
-          ignoreDuplicates: true,
-        });
+      const { error: upsertErr } = await persistRequisitosPorProcesoInsert(
+        supabase as ProcesoReqSupabaseLike,
+        rowsToInsert
+      );
 
       if (upsertErr) {
         return {
@@ -1208,48 +1210,22 @@ export async function persistSyncProcesoRequisitos(
     }
 
     if (mirrorMode && target.toRemove.length > 0) {
-      const reqTable = supabase.from('requisitos_por_proceso');
-      if (typeof reqTable.delete === 'function') {
-        let baseDelete = reqTable
-          .delete()
-          .eq('id_proceso', validProcId)
-          .eq('id_certificado', target.id_certificado_destino);
-        if (targetVerId) {
-          baseDelete = baseDelete.eq('id_certificado_version', targetVerId);
+      const { error: delErr } = await persistRequisitosPorProcesoDelete(
+        supabase as ProcesoReqSupabaseLike,
+        {
+          id_proceso: validProcId,
+          id_certificado: target.id_certificado_destino,
+          id_certificado_version: targetVerId,
+          requisitoIds: target.toRemove,
         }
-
-        if (typeof baseDelete.in === 'function') {
-          const { error: delErr } = await baseDelete.in(
-            'id_requisito',
-            target.toRemove
-          );
-          if (delErr) {
-            return {
-              ok: false,
-              error: translateShareDbError(delErr),
-            };
-          }
-          deletedCount += target.toRemove.length;
-        } else {
-          for (const reqId of target.toRemove) {
-            let singleDelete = reqTable
-              .delete()
-              .eq('id_proceso', validProcId)
-              .eq('id_certificado', target.id_certificado_destino);
-            if (targetVerId) {
-              singleDelete = singleDelete.eq('id_certificado_version', targetVerId);
-            }
-            const { error: delErr } = await singleDelete.eq('id_requisito', reqId);
-            if (delErr) {
-              return {
-                ok: false,
-                error: translateShareDbError(delErr),
-              };
-            }
-            deletedCount += 1;
-          }
-        }
+      );
+      if (delErr) {
+        return {
+          ok: false,
+          error: translateShareDbError(delErr),
+        };
       }
+      deletedCount += target.toRemove.length;
     }
 
     syncedCertsCount += 1;

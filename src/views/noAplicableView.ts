@@ -137,13 +137,34 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     ? `Cláusula ${noAplicable.requisito_codigo} — ${noAplicable.requisito_titulo}`
     : 'Exclusión de Requisito (ISO 4.3)';
 
+  const eyebrowCode = isCreateMode
+    ? selectedCert
+      ? `${selectedCert.numero_certificado} · ${selectedCert.norma_codigo}`
+      : 'ISO 4.3'
+    : noAplicable
+    ? `${noAplicable.numero_certificado} · ${noAplicable.norma_codigo}`
+    : 'ISO 4.3';
+
   const subtitle = isCreateMode
     ? selectedCert
-      ? `${selectedCert.numero_certificado} · ${selectedCert.norma_codigo} (${selectedCert.organizacion_nombre})`
+      ? `${selectedCert.organizacion_nombre} (${selectedCert.organizacion_rif}) · Exclusiones bajo norma ${selectedCert.norma_codigo}`
       : 'Declaración formal de requisito no aplicable conforme a ISO 9001 / ISO 17021-1 Cláusula 4.3'
     : noAplicable
-    ? `${noAplicable.norma_codigo} · ${noAplicable.organizacion_nombre}`
+    ? `${noAplicable.organizacion_nombre} (${noAplicable.organizacion_rif}) · Exclusión ISO 4.3`
     : '';
+
+  const secondaryHeaderBadge =
+    isCreateMode && selectedCert
+      ? {
+          label: `${selectedCert.noAplicables.length} exclusión${selectedCert.noAplicables.length === 1 ? '' : 'es'} declarada${selectedCert.noAplicables.length === 1 ? '' : 's'}`,
+          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+        }
+      : !isCreateMode && noAplicable
+      ? {
+          label: `Cláusula ${noAplicable.requisito_codigo}`,
+          badgeClass: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+        }
+      : undefined;
 
   const parents: DetailParentChip[] =
     mode === 'read' && noAplicable
@@ -198,9 +219,17 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
 
   const customParentZoneHtml =
     mode === 'add' || mode === 'edit'
-      ? renderNoAplicableParentSelectors({
+      ? renderNoAplicableParentSelector({
           draft,
           certificates,
+          selectedCert,
+        })
+      : undefined;
+
+  const betweenZone2AndZone3Html =
+    mode === 'add' || mode === 'edit'
+      ? renderNoAplicableClausePickerSection({
+          draft,
           selectedCert,
           availableRequisitos,
           pickerRows,
@@ -210,8 +239,9 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
           selectedReq,
           mutationPreview,
           ancestorAdvisory,
+          isCreateMode,
         })
-      : undefined;
+      : '';
 
   const customTopActionsHtml = isStaff
     ? renderDetailFormTopActions({
@@ -285,15 +315,21 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     entityType: 'Exclusión de Requisito',
     entitySymbol: '🚫',
     title,
-    eyebrowCode: isCreateMode ? 'ISO 4.3' : noAplicable?.numero_certificado || 'ISO 4.3',
+    eyebrowCode,
     subtitle,
     statusBadge: {
       label: 'No Aplicable (ISO 4.3)',
       badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
       symbol: '🚫',
     },
+    secondaryHeaderBadge,
     backButton: {
-      label: 'Volver',
+      label:
+        !isCreateMode && noAplicable
+          ? `Volver a ${noAplicable.numero_certificado}`
+          : selectedCert
+          ? `Volver a ${selectedCert.numero_certificado}`
+          : 'Volver',
       nav: 'certificacion',
       subview: 'certificates',
       action: 'back-from-no-aplicable',
@@ -307,6 +343,7 @@ export function renderNoAplicableView(props: NoAplicableViewProps): string {
     feedbackHtml,
     attributes: [],
     customRecordBodyHtml,
+    betweenZone2AndZone3Html,
     childTabs: [],
   });
 }
@@ -326,38 +363,22 @@ function getNoAplicableRowIndentClass(level: number): string {
   return NA_TREE_INDENT_CLASSES[clamped] || 'pl-2.5';
 }
 
-export function renderNoAplicableChecklistRowsHtml(params: {
+export function renderNoAplicableRowsSubsetHtml(params: {
   rows: ReadonlyArray<NoAplicablePickerRow>;
   selectedReqId: string;
-  expandedClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
-  filterQuery?: string;
+  expandedSet: ReadonlySet<string>;
+  isSearching: boolean;
 }): string {
-  const { rows, selectedReqId, expandedClauseIds } = params;
-  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
-  const effectiveExpandedSet =
-    expandedClauseIds === undefined
-      ? new Set(getDefaultExpandedClauseIds(rows))
-      : expandedClauseIds instanceof Set
-      ? expandedClauseIds
-      : new Set(expandedClauseIds);
-  const visibleRows = filterVisibleHierarchyRows(rows, expandedClauseIds);
+  const { rows, selectedReqId, expandedSet, isSearching } = params;
 
-  if (visibleRows.length === 0) {
-    return `
-      <div class="p-6 text-center text-xs text-slate-500">
-        No se encontraron cláusulas que coincidan con el filtro seleccionado.
-      </div>
-    `;
-  }
-
-  return visibleRows
+  return rows
     .map((row) => {
       const indentClass = getNoAplicableRowIndentClass(
         isSearching ? (row.ancestorIds?.length || 0) + 1 : row.indentLevel
       );
       const isSelected = !row.disabled && selectedReqId === row.req.id;
       const isCollapsible = row.hasChildren;
-      const isExpanded = isCollapsible && effectiveExpandedSet.has(row.req.id);
+      const isExpanded = isCollapsible && expandedSet.has(row.req.id);
 
       const statusBadges: string[] = [];
       if (row.isDuplicateExclusion) {
@@ -395,9 +416,10 @@ export function renderNoAplicableChecklistRowsHtml(params: {
         ? `${row.req.codigo} ${row.titleText}:`
         : row.req.codigo;
       const tooltipText = row.rawText ? `${leadText} ${row.rawText}` : leadText;
+      const primaryColorClass = row.disabled ? 'text-slate-500' : 'text-slate-900';
       const primaryLeadHtml = row.hasTitle
-        ? `<span class="font-bold ${row.disabled ? 'text-slate-500' : 'text-slate-900'}"><span class="font-mono ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
-        : `<span class="font-mono font-bold ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span>`;
+        ? `<span class="font-bold ${primaryColorClass}"><span class="font-mono">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
+        : `<span class="font-mono font-bold ${primaryColorClass}">${escapeHtml(row.req.codigo)}</span>`;
       const rawTextHtml = row.rawText
         ? ` <span class="font-normal ${row.disabled ? 'text-slate-400' : 'text-slate-500'}">${escapeHtml(row.rawText)}</span>`
         : '';
@@ -407,11 +429,12 @@ export function renderNoAplicableChecklistRowsHtml(params: {
           data-na-clause-row="true"
           data-requisito-id="${escapeHtml(row.req.id)}"
           data-codigo="${escapeHtml(row.req.codigo)}"
+          data-ancestor-ids="${escapeHtml((row.ancestorIds || []).join(','))}"
           class="flex items-center justify-between gap-2 py-2 pr-3 ${indentClass} ${
             row.disabled
               ? 'bg-slate-50/70 text-slate-400 opacity-85'
               : isSelected
-              ? 'bg-rose-50/70 hover:bg-rose-50'
+              ? 'bg-indigo-50/60 hover:bg-indigo-50'
               : 'hover:bg-slate-50'
           } transition-colors"
         >
@@ -424,7 +447,7 @@ export function renderNoAplicableChecklistRowsHtml(params: {
                 value="${escapeHtml(row.req.id)}"
                 ${isSelected ? 'checked' : ''}
                 ${row.disabled ? 'disabled' : ''}
-                class="h-4 w-4 border-slate-300 text-rose-600 focus:ring-rose-500 shrink-0 ${
+                class="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0 ${
                   row.disabled ? 'cursor-not-allowed' : 'cursor-pointer'
                 }"
               />
@@ -444,9 +467,82 @@ export function renderNoAplicableChecklistRowsHtml(params: {
     .join('');
 }
 
-function renderNoAplicableParentSelectors(params: {
+export function renderNoAplicableChecklistRowsHtml(params: {
+  rows: ReadonlyArray<NoAplicablePickerRow>;
+  selectedReqId: string;
+  expandedClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
+  filterQuery?: string;
+}): string {
+  const { rows, selectedReqId, expandedClauseIds } = params;
+  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
+  const effectiveExpandedSet =
+    expandedClauseIds === undefined
+      ? new Set(getDefaultExpandedClauseIds(rows))
+      : expandedClauseIds instanceof Set
+      ? expandedClauseIds
+      : new Set(expandedClauseIds);
+  const visibleRows = filterVisibleHierarchyRows(rows, expandedClauseIds);
+
+  if (visibleRows.length === 0) {
+    return `
+      <div class="p-6 text-center text-xs text-slate-500">
+        No se encontraron cláusulas que coincidan con el filtro seleccionado.
+      </div>
+    `;
+  }
+
+  return renderNoAplicableRowsSubsetHtml({
+    rows: visibleRows,
+    selectedReqId,
+    expandedSet: effectiveExpandedSet,
+    isSearching,
+  });
+}
+
+function renderNoAplicableParentSelector(params: {
   draft: NoAplicableFormDraft;
   certificates: ReadonlyArray<CertificadoDetailEntity>;
+  selectedCert: CertificadoDetailEntity | null;
+}): string {
+  const { draft, certificates, selectedCert } = params;
+
+  return `
+    <div class="bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
+      <label for="naSelectCertificado" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        Certificado y Norma Evaluada <span class="text-rose-600" aria-hidden="true">*</span>
+      </label>
+      <select
+        id="naSelectCertificado"
+        name="id_certificado"
+        form="noAplicableDetailForm"
+        required
+        class="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+      >
+        <option value="">Seleccione un certificado...</option>
+        ${certificates
+          .map((cert) => {
+            const isSelected = cert.id === draft.id_certificado;
+            return `
+              <option value="${escapeHtml(cert.id)}" ${isSelected ? 'selected' : ''}>
+                ${escapeHtml(cert.numero_certificado)} · ${escapeHtml(cert.norma_codigo)} (${escapeHtml(cert.organizacion_nombre)})
+              </option>
+            `;
+          })
+          .join('')}
+      </select>
+      <p class="text-[11px] text-slate-500">
+        ${
+          selectedCert
+            ? `Norma del certificado: ${escapeHtml(selectedCert.norma_codigo)}. Las cláusulas disponibles se filtran estrictamente a esta norma.`
+            : 'Seleccione el certificado padre para habilitar el selector jerárquico de cláusulas.'
+        }
+      </p>
+    </div>
+  `;
+}
+
+function renderNoAplicableClausePickerSection(params: {
+  draft: NoAplicableFormDraft;
   selectedCert: CertificadoDetailEntity | null;
   availableRequisitos: ReadonlyArray<RequisitoLtree>;
   pickerRows: ReadonlyArray<NoAplicablePickerRow>;
@@ -456,10 +552,10 @@ function renderNoAplicableParentSelectors(params: {
   selectedReq: RequisitoLtree | null;
   mutationPreview: NonApplicableSmartMutationPreview;
   ancestorAdvisory: NoAplicableAncestorAdvisory;
+  isCreateMode: boolean;
 }): string {
   const {
     draft,
-    certificates,
     selectedCert,
     availableRequisitos,
     pickerRows,
@@ -469,6 +565,7 @@ function renderNoAplicableParentSelectors(params: {
     selectedReq,
     mutationPreview,
     ancestorAdvisory,
+    isCreateMode,
   } = params;
 
   const groupedPruned = mutationPreview.willMutate
@@ -481,7 +578,7 @@ function renderNoAplicableParentSelectors(params: {
         <div
           id="noAplicableSmartMutationPreview"
           role="status"
-          class="lg:col-span-2 p-3.5 rounded-xl border border-amber-300 bg-amber-50/90 text-amber-950 space-y-2"
+          class="p-3.5 rounded-xl border border-amber-300 bg-amber-50/90 text-amber-950 space-y-2"
         >
           <div class="flex items-center gap-2 text-xs font-bold text-amber-900">
             <span>⚡ Mutación Inteligente (No Bloqueante): Reasignación automática al guardar</span>
@@ -507,7 +604,7 @@ function renderNoAplicableParentSelectors(params: {
         <div
           id="noAplicableAncestorHint"
           role="note"
-          class="lg:col-span-2 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100/80 text-slate-700 text-xs flex items-start gap-2"
+          class="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100/80 text-slate-700 text-xs flex items-start gap-2"
         >
           <span aria-hidden="true" class="shrink-0">ℹ️</span>
           <span>
@@ -527,66 +624,89 @@ function renderNoAplicableParentSelectors(params: {
     { id: 'pending', label: 'Disponibles' },
   ];
 
+  const summaryText = selectedReq
+    ? `Cláusula ${selectedReq.codigo} seleccionada (exclusión ISO 4.3 de subárbol LTREE)`
+    : 'Ninguna cláusula seleccionada';
+
   return `
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      <div class="lg:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3 space-y-1.5">
-        <label for="naSelectCertificado" class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          Certificado de Conformidad *
-        </label>
-        <select
-          id="naSelectCertificado"
-          name="id_certificado"
-          form="noAplicableDetailForm"
-          required
-          class="w-full text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-50"
-        >
-          <option value="">Seleccione un certificado...</option>
-          ${certificates
-            .map((cert) => {
-              const isSelected = cert.id === draft.id_certificado;
-              return `
-                <option value="${escapeHtml(cert.id)}" ${isSelected ? 'selected' : ''}>
-                  ${escapeHtml(cert.numero_certificado)} — ${escapeHtml(cert.organizacion_nombre)} (${escapeHtml(cert.norma_codigo)})
-                </option>
-              `;
-            })
-            .join('')}
-        </select>
-        ${
-          selectedCert
-            ? `<p class="text-[11px] text-indigo-700 font-semibold">Norma evaluada: ${escapeHtml(selectedCert.norma_codigo)}</p>`
-            : `<p class="text-[11px] text-slate-500">Al seleccionar un certificado se filtran las cláusulas de su norma.</p>`
-        }
-      </div>
+    <div class="border-t border-slate-200 pt-4 space-y-4">
+      ${smartMutationBannerHtml}
+      ${ancestorHintHtml}
 
-      <input
-        type="hidden"
-        id="naSelectRequisito"
-        name="id_requisito"
-        form="noAplicableDetailForm"
-        value="${escapeHtml(draft.id_requisito)}"
-      />
-
-      <div id="naClausePickerPanel" class="lg:col-span-2 bg-slate-50/70 border border-slate-200/90 rounded-xl p-3.5 space-y-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Cláusula / Requisito Normativo *
+      <div id="naClausePickerPanel" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+        <div class="space-y-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 class="text-xs font-bold uppercase tracking-wider text-slate-700">
+                Selector Jerárquico de Subárboles (${escapeHtml(selectedCert?.norma_codigo || 'ISO 4.3')})
+              </h4>
+              <p class="text-[11px] text-slate-500">
+                ${
+                  selectedCert
+                    ? `${availableRequisitos.length} cláusula(s) en ${escapeHtml(selectedCert.norma_codigo)} · Marcar una cláusula padre excluye automáticamente su subárbol activo mediante LTREE.`
+                    : 'Seleccione un certificado arriba para desplegar la estructura jerárquica de cláusulas.'
+                }
+              </p>
             </div>
-            <p class="text-[11px] text-slate-500">
-              ${
-                selectedCert
-                  ? `${availableRequisitos.length} cláusula(s) disponible(s) para ${escapeHtml(selectedCert.norma_codigo)} (mutación inteligente no bloqueante).`
-                  : 'Seleccione un certificado arriba para cargar la estructura jerárquica de cláusulas de su norma.'
-              }
-            </p>
+            ${
+              selectedCert && draft.id_requisito
+                ? `
+                  <button
+                    type="button"
+                    data-action="clear-no-aplicable-selection"
+                    class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Limpiar Selección
+                  </button>
+                `
+                : ''
+            }
           </div>
+
           ${
-            selectedReq
+            selectedCert
               ? `
-                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200">
-                  Cláusula ${escapeHtml(selectedReq.codigo)} seleccionada
-                </span>
+                <div class="flex flex-col lg:flex-row lg:items-center gap-2">
+                  <div class="relative flex-1 min-w-[220px]">
+                    <div class="pointer-events-none absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7" />
+                        <path stroke-linecap="round" d="m20 20-3.5-3.5" />
+                      </svg>
+                    </div>
+                    <input
+                      id="naClauseFilterInput"
+                      type="text"
+                      data-action="filter-no-aplicable-clauses"
+                      value="${escapeHtml(clauseFilterQuery)}"
+                      placeholder="Filtrar cláusula por código, título o texto (ES / EN)..."
+                      autocomplete="off"
+                      class="w-full h-8 text-xs rounded-lg border border-slate-300 bg-white pl-8 pr-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    />
+                  </div>
+                  <div class="inline-flex flex-wrap items-center gap-1" role="group" aria-label="Filtro de cláusulas no aplicables">
+                    ${modePills
+                      .map((pill) => {
+                        const isActive = clauseMode === pill.id;
+                        return `
+                          <button
+                            type="button"
+                            data-action="set-no-aplicable-clause-mode"
+                            data-na-mode="${pill.id}"
+                            aria-pressed="${isActive}"
+                            class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
+                              isActive
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                            }"
+                          >
+                            ${escapeHtml(pill.label)}
+                          </button>
+                        `;
+                      })
+                      .join('')}
+                  </div>
+                </div>
               `
               : ''
           }
@@ -595,51 +715,9 @@ function renderNoAplicableParentSelectors(params: {
         ${
           selectedCert
             ? `
-              <div class="flex flex-col lg:flex-row lg:items-center gap-2">
-                <div class="relative flex-1 min-w-[220px]">
-                  <div class="pointer-events-none absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-                      <circle cx="11" cy="11" r="7" />
-                      <path stroke-linecap="round" d="m20 20-3.5-3.5" />
-                    </svg>
-                  </div>
-                  <input
-                    id="naClauseFilterInput"
-                    type="text"
-                    data-action="filter-no-aplicable-clauses"
-                    value="${escapeHtml(clauseFilterQuery)}"
-                    placeholder="Filtrar cláusula por código, título o texto (ES / EN)..."
-                    autocomplete="off"
-                    class="w-full h-8 text-xs rounded-lg border border-slate-300 bg-white pl-8 pr-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  />
-                </div>
-                <div class="inline-flex flex-wrap items-center gap-1" role="group" aria-label="Filtro de cláusulas no aplicables">
-                  ${modePills
-                    .map((pill) => {
-                      const isActive = clauseMode === pill.id;
-                      return `
-                        <button
-                          type="button"
-                          data-action="set-no-aplicable-clause-mode"
-                          data-na-mode="${pill.id}"
-                          aria-pressed="${isActive}"
-                          class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
-                            isActive
-                              ? 'bg-slate-900 text-white border-slate-900'
-                              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                          }"
-                        >
-                          ${escapeHtml(pill.label)}
-                        </button>
-                      `;
-                    })
-                    .join('')}
-                </div>
-              </div>
-
               <div
                 id="naClauseChecklistContainer"
-                class="max-h-80 overflow-y-auto divide-y divide-slate-200/80 rounded-xl border border-slate-200 bg-white"
+                class="max-h-96 overflow-y-auto divide-y divide-slate-200/80 rounded-xl border border-slate-200 bg-white"
               >
                 ${renderNoAplicableChecklistRowsHtml({
                   rows: pickerRows,
@@ -648,17 +726,39 @@ function renderNoAplicableParentSelectors(params: {
                   filterQuery: clauseFilterQuery,
                 })}
               </div>
+
+              <div
+                id="naBatchStickySummaryBar"
+                class="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-white/95 backdrop-blur px-3.5 py-2.5 shadow-sm"
+              >
+                <span id="naBatchSummaryText" class="text-xs font-bold text-slate-800">
+                  ${escapeHtml(summaryText)}
+                </span>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-action="cancel-no-aplicable-footer"
+                    class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    form="noAplicableDetailForm"
+                    class="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    ${isCreateMode ? 'Declarar Exclusión' : 'Guardar Cambios'}
+                  </button>
+                </div>
+              </div>
             `
             : `
-              <div class="p-4 text-center text-xs text-slate-500 rounded-xl border border-dashed border-slate-300 bg-white">
+              <div class="p-6 text-center text-xs text-slate-500 rounded-xl border border-dashed border-slate-300 bg-white">
                 Seleccione primero un certificado para desplegar el selector jerárquico de cláusulas.
               </div>
             `
         }
       </div>
-
-      ${smartMutationBannerHtml}
-      ${ancestorHintHtml}
     </div>
   `;
 }
@@ -666,14 +766,14 @@ function renderNoAplicableParentSelectors(params: {
 function renderReadOnlyNoAplicableBody(noAplicable: NoAplicableDetailEntity): string {
   return `
     <div class="space-y-3">
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Cláusula Excluida</div>
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="inline-flex px-2 py-0.5 rounded font-mono text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200">
-              Cláusula ${escapeHtml(noAplicable.requisito_codigo)}
-            </span>
-            <span class="text-xs font-bold text-slate-900">${escapeHtml(noAplicable.requisito_titulo)}</span>
+          <div class="text-xs font-bold text-slate-900">
+            <span class="font-mono text-rose-700">Cláusula ${escapeHtml(noAplicable.requisito_codigo)}</span>
+          </div>
+          <div class="text-[11px] text-slate-600 truncate" title="${escapeHtml(noAplicable.requisito_titulo)}">
+            ${escapeHtml(noAplicable.requisito_titulo)}
           </div>
         </div>
 
@@ -685,7 +785,14 @@ function renderReadOnlyNoAplicableBody(noAplicable: NoAplicableDetailEntity): st
 
         <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Ruta Jerárquica LTREE</div>
-          <div class="text-xs font-mono font-bold text-indigo-700">${escapeHtml(noAplicable.ruta_materializada)}</div>
+          <div class="text-xs font-mono font-bold text-indigo-800">${escapeHtml(noAplicable.ruta_materializada)}</div>
+          <div class="text-[11px] text-slate-500">Exclusión ISO 4.3</div>
+        </div>
+
+        <div class="p-3.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Certificado Vinculado</div>
+          <div class="text-xs font-mono font-bold text-slate-900">${escapeHtml(noAplicable.numero_certificado)}</div>
+          <div class="text-[11px] text-slate-500 truncate" title="${escapeHtml(noAplicable.organizacion_nombre)}">${escapeHtml(noAplicable.organizacion_nombre)}</div>
         </div>
       </div>
 
@@ -727,6 +834,13 @@ function renderNoAplicableFormBody(params: {
 
   return `
     <form id="noAplicableDetailForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+      <input
+        type="hidden"
+        id="naSelectRequisito"
+        name="id_requisito"
+        value="${escapeHtml(draft.id_requisito)}"
+      />
+
       ${
         selectedReq
           ? `
@@ -747,13 +861,17 @@ function renderNoAplicableFormBody(params: {
               </span>
             </div>
           `
-          : ''
+          : `
+            <div class="p-3 bg-white border border-dashed border-slate-300 rounded-lg text-xs text-slate-500">
+              Seleccione una cláusula normativa en el selector jerárquico inferior para asociarla a esta exclusión ISO 4.3.
+            </div>
+          `
       }
 
       <div class="space-y-1.5">
         <div class="flex items-center justify-between gap-2">
           <label for="naJustificacionInput" class="block text-xs font-bold text-slate-700">
-            Justificación Técnica (Cláusula ISO 4.3) *
+            Justificación Técnica (Cláusula ISO 4.3) <span class="text-rose-600" aria-hidden="true">*</span>
           </label>
           <span class="text-[11px] font-mono text-slate-500">
             <span id="naJustificacionCharCount">${charCount}</span> / ${NO_APLICABLE_JUSTIFICACION_MAX_LENGTH}
@@ -762,7 +880,7 @@ function renderNoAplicableFormBody(params: {
         <textarea
           id="naJustificacionInput"
           name="justificacion"
-          rows="4"
+          rows="3"
           required
           minlength="${NO_APLICABLE_JUSTIFICACION_MIN_LENGTH}"
           maxlength="${NO_APLICABLE_JUSTIFICACION_MAX_LENGTH}"

@@ -104,7 +104,10 @@ import {
   type CatalogItem,
 } from './views/extraView';
 import { renderNormaRequisitosTableSection } from './views/normaView';
-import { renderNoAplicableChecklistRowsHtml } from './views/noAplicableView';
+import {
+  renderNoAplicableChecklistRowsHtml,
+  renderNoAplicableRowsSubsetHtml,
+} from './views/noAplicableView';
 import {
   renderFullNormaSearchSummaryText,
   renderNormativeObligationBadges,
@@ -150,6 +153,7 @@ import type {
 } from './views/sitioView';
 import {
   renderProcesoBatchChecklistRowsHtml,
+  renderProcesoBatchRowsSubsetHtml,
   renderProcesoBatchSummaryText,
   type ProcesoChildTab,
   type ProcesoSharedCertContext,
@@ -692,9 +696,17 @@ import {
   translateProcesoDbError,
   validateProcesoFormDraft,
   validateProcesoInput,
+  type BuildProcesoBatchPickerResult,
   type ProcesoBatchMode,
+  type ProcesoBatchPickerRow,
+  type ProcesoDetailEntity,
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
+import {
+  persistRequisitosPorProcesoDelete,
+  persistRequisitosPorProcesoInsert,
+  type ProcesoReqSupabaseLike,
+} from './lib/procesoRequisitosPersistence';
 import {
   planShareSitiosWithCascade,
 } from './lib/sitioShareDomain';
@@ -763,6 +775,7 @@ import {
   validateNoAplicableDraft,
   type NoAplicableClauseMode,
   type NoAplicableFormDraft,
+  type NoAplicablePickerRow,
   type NoAplicableViewState,
 } from './lib/noAplicableDomain';
 import {
@@ -21444,19 +21457,19 @@ function bindAuthenticatedEvents(): void {
             ensureRequisitoInDb(req, catalogSnapshot),
             resolveCertActiveVersionIdForDb(targetCertId, parentCert),
           ]);
-          const { error } = await supabase.from('requisitos_por_proceso').upsert(
-            {
-              id_proceso: procesoId,
-              id_certificado: targetCertId,
-              ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
-              id_requisito: dbReqId,
-            },
-            {
-              onConflict: 'id_proceso,id_certificado_version,id_requisito',
-              ignoreDuplicates: true,
-            }
+          const { error } = await persistRequisitosPorProcesoInsert(
+            supabase as unknown as ProcesoReqSupabaseLike,
+            [
+              {
+                id_proceso: procesoId,
+                id_certificado: targetCertId,
+                ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
+                id_requisito: dbReqId,
+              },
+            ],
+            REQUISITOS_POR_PROCESO_UPSERT_OPTIONS.onConflict
           );
-          if (error && !isMissingTableOrSchemaError(error)) {
+          if (error) {
             rollbackProcesoRequirementsInClientState(targetCertId, procesoId, [
               req.codigo,
             ]);
@@ -21464,8 +21477,13 @@ function bindAuthenticatedEvents(): void {
             void loadLiveCertificates();
             render();
           }
-        } catch {
-          // Optimistic reactive fallback preserved
+        } catch (err) {
+          rollbackProcesoRequirementsInClientState(targetCertId, procesoId, [
+            req.codigo,
+          ]);
+          showFloatingToast(translateProcesoDbError(err), 'warning');
+          void loadLiveCertificates();
+          render();
         }
       })();
     }
@@ -21496,23 +21514,17 @@ function bindAuthenticatedEvents(): void {
   const refreshProcesoBatchSummaryInDom = (): void => {
     const ctx = resolveActiveProcesoContext();
     if (!ctx) return;
-    const scopedReqs = getScopedNormaRequirements({
-      id_norma: ctx.currentProceso.id_norma,
-      norma_codigo: ctx.currentProceso.norma_codigo,
-      requirementsCatalog: ctx.catalogSnapshot,
+    const pickerData = getMemoizedProcesoBatchPickerData({
+      cert: ctx.parentCert,
+      currentProceso: ctx.currentProceso,
+      catalogSnapshot: ctx.catalogSnapshot,
+      mode: state.procesoDomain.batchMode || 'mandatory',
+      filterQuery: state.procesoDomain.batchFilterQuery || '',
     });
-    const coverageReport = ctx.parentCert
-      ? evaluateCertificateCoverage({
-          cert: ctx.parentCert,
-          requirementsCatalog: ctx.catalogSnapshot,
-          archivedProcesoIds: state.domainData.archivedProcesoIds,
-          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-        })
-      : null;
     const summary = computeProcesoBatchSelectionSummary({
       selectedReqIds: state.procesoDomain.selectedBatchRequisitoIds || [],
-      scopedReqs,
-      coverageReport,
+      scopedReqs: pickerData.scopedReqs,
+      coverageReport: pickerData.coverageReport,
     });
     const summaryEl = document.getElementById('procesoBatchSummaryText');
     if (summaryEl) {
@@ -21520,78 +21532,140 @@ function bindAuthenticatedEvents(): void {
     }
   };
 
-  const bindProcesoBatchCheckboxListeners = (): void => {
-    document
-      .querySelectorAll<HTMLInputElement>(
-        '#assignProcesoRequisitosBatchForm input[name="batch_requisito_id"]'
-      )
-      .forEach((checkbox) => {
-        checkbox.addEventListener('change', () => {
-          const reqId = checkbox.value.trim();
-          if (!reqId) return;
-          const nextSet = new Set(state.procesoDomain.selectedBatchRequisitoIds || []);
-          if (checkbox.checked) {
-            nextSet.add(reqId);
-          } else {
-            nextSet.delete(reqId);
-          }
-          state.procesoDomain.selectedBatchRequisitoIds = Array.from(nextSet);
-
-          const rowLabel = checkbox.closest<HTMLElement>('[data-batch-clause-row="true"]');
-          if (rowLabel && !checkbox.disabled) {
-            rowLabel.classList.toggle('bg-indigo-50/60', checkbox.checked);
-            rowLabel.classList.toggle('hover:bg-indigo-50', checkbox.checked);
-            rowLabel.classList.toggle('hover:bg-slate-50', !checkbox.checked);
-          }
-          refreshProcesoBatchSummaryInDom();
-        });
-      });
+  const getProcesoBatchExpandedSet = (rows: ReadonlyArray<ProcesoBatchPickerRow>): Set<string> => {
+    const isSearching = (state.procesoDomain.batchFilterQuery || '').trim().length > 0;
+    const stored = isSearching
+      ? state.procesoDomain.searchExpandedBatchClauseIds
+      : state.procesoDomain.expandedBatchClauseIds;
+    return new Set(stored ?? getDefaultExpandedClauseIds(rows));
   };
 
-  const bindProcesoBatchToggleListeners = (): void => {
-    document
-      .querySelectorAll<HTMLButtonElement>(
-        '#procesoBatchChecklistContainer [data-action="toggle-proceso-batch-node"]'
-      )
-      .forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const nodeId = (btn.dataset.nodeId || '').trim();
-          if (!nodeId) return;
-          const ctx = resolveActiveProcesoContext();
-          if (!ctx) return;
-          const isSearching = (state.procesoDomain.batchFilterQuery || '').trim().length > 0;
-          const pickerData = buildProcesoBatchPickerRows({
-            cert: ctx.parentCert,
-            currentProceso: ctx.currentProceso,
-            idNorma: ctx.currentProceso.id_norma,
-            normaCodigo: ctx.currentProceso.norma_codigo,
-            requirementsCatalog: ctx.catalogSnapshot,
-            mode: state.procesoDomain.batchMode || 'mandatory',
-            filterQuery: state.procesoDomain.batchFilterQuery || '',
-            archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-            archivedProcesoIds: state.domainData.archivedProcesoIds,
-          });
-          const currentIds = isSearching
-            ? state.procesoDomain.searchExpandedBatchClauseIds ??
-              getDefaultExpandedClauseIds(pickerData.rows)
-            : state.procesoDomain.expandedBatchClauseIds ??
-              getDefaultExpandedClauseIds(pickerData.rows);
-          const nextSet = new Set(currentIds);
-          if (nextSet.has(nodeId)) {
-            nextSet.delete(nodeId);
-          } else {
-            nextSet.add(nodeId);
-          }
-          if (isSearching) {
-            state.procesoDomain.searchExpandedBatchClauseIds = Array.from(nextSet);
-          } else {
-            state.procesoDomain.expandedBatchClauseIds = Array.from(nextSet);
-          }
-          renderProcesoBatchChecklistInDom(true);
-        });
+  const spliceProcesoBatchToggleInDom = (
+    container: HTMLElement,
+    nodeId: string,
+    rows: ReadonlyArray<ProcesoBatchPickerRow>,
+    expandedSet: Set<string>,
+    isSearching: boolean
+  ): boolean => {
+    const btn = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[data-action="toggle-proceso-batch-node"]')
+    ).find((el) => (el.dataset.nodeId || '').trim() === nodeId);
+    const rowEl = btn?.closest<HTMLElement>('[data-batch-clause-row="true"]');
+    if (!btn || !rowEl) return false;
+
+    const willExpand = expandedSet.has(nodeId);
+    btn.setAttribute('aria-expanded', willExpand ? 'true' : 'false');
+    btn.setAttribute('title', willExpand ? 'Contraer subcláusulas' : 'Desplegar subcláusulas');
+    const chevronSvg = btn.querySelector('svg');
+    if (chevronSvg) {
+      chevronSvg.classList.toggle('rotate-90', willExpand);
+    }
+
+    if (!willExpand) {
+      let next = rowEl.nextElementSibling as HTMLElement | null;
+      while (next && next.dataset.batchClauseRow === 'true') {
+        const ancRaw = next.dataset.ancestorIds || '';
+        const ancList = ancRaw ? ancRaw.split(',') : [];
+        if (!ancList.includes(nodeId)) break;
+        const toRemove = next;
+        next = next.nextElementSibling as HTMLElement | null;
+        toRemove.remove();
+      }
+      return true;
+    }
+
+    const startIdx = rows.findIndex((r) => r.req.id === nodeId);
+    if (startIdx < 0) return false;
+    const rowsToInsert: ProcesoBatchPickerRow[] = [];
+    for (let i = startIdx + 1; i < rows.length; i += 1) {
+      const cand = rows[i];
+      if (!cand.ancestorIds.includes(nodeId)) break;
+      if (cand.ancestorIds.every((ancId) => expandedSet.has(ancId))) {
+        rowsToInsert.push(cand);
+      }
+    }
+
+    if (rowsToInsert.length > 0) {
+      const subsetHtml = renderProcesoBatchRowsSubsetHtml({
+        rows: rowsToInsert,
+        selectedIdSet: new Set(state.procesoDomain.selectedBatchRequisitoIds || []),
+        expandedSet,
+        isSearching,
       });
+      rowEl.insertAdjacentHTML('afterend', subsetHtml);
+    }
+    return true;
+  };
+
+  const bindProcesoBatchDelegatedListeners = (): void => {
+    const container = document.getElementById('procesoBatchChecklistContainer');
+    if (!container || container.dataset.delegatedBound === 'true') return;
+    container.dataset.delegatedBound = 'true';
+
+    container.addEventListener('change', (ev) => {
+      const target = ev.target as HTMLElement | null;
+      if (!(target instanceof HTMLInputElement) || target.name !== 'batch_requisito_id') {
+        return;
+      }
+      const reqId = target.value.trim();
+      if (!reqId) return;
+      const nextSet = new Set(state.procesoDomain.selectedBatchRequisitoIds || []);
+      if (target.checked) {
+        nextSet.add(reqId);
+      } else {
+        nextSet.delete(reqId);
+      }
+      state.procesoDomain.selectedBatchRequisitoIds = Array.from(nextSet);
+
+      const rowLabel = target.closest<HTMLElement>('[data-batch-clause-row="true"]');
+      if (rowLabel && !target.disabled) {
+        rowLabel.classList.toggle('bg-indigo-50/60', target.checked);
+        rowLabel.classList.toggle('hover:bg-indigo-50', target.checked);
+        rowLabel.classList.toggle('hover:bg-slate-50', !target.checked);
+      }
+      refreshProcesoBatchSummaryInDom();
+    });
+
+    container.addEventListener('click', (ev) => {
+      const target = ev.target as HTMLElement | null;
+      const toggleBtn = target?.closest<HTMLButtonElement>(
+        '[data-action="toggle-proceso-batch-node"]'
+      );
+      if (!toggleBtn) return;
+
+      ev.preventDefault();
+      ev.stopPropagation();
+      const nodeId = (toggleBtn.dataset.nodeId || '').trim();
+      if (!nodeId) return;
+      const ctx = resolveActiveProcesoContext();
+      if (!ctx) return;
+
+      const filterQuery = state.procesoDomain.batchFilterQuery || '';
+      const isSearching = filterQuery.trim().length > 0;
+      const pickerData = getMemoizedProcesoBatchPickerData({
+        cert: ctx.parentCert,
+        currentProceso: ctx.currentProceso,
+        catalogSnapshot: ctx.catalogSnapshot,
+        mode: state.procesoDomain.batchMode || 'mandatory',
+        filterQuery,
+      });
+
+      const nextSet = getProcesoBatchExpandedSet(pickerData.rows);
+      if (nextSet.has(nodeId)) {
+        nextSet.delete(nodeId);
+      } else {
+        nextSet.add(nodeId);
+      }
+      if (isSearching) {
+        state.procesoDomain.searchExpandedBatchClauseIds = Array.from(nextSet);
+      } else {
+        state.procesoDomain.expandedBatchClauseIds = Array.from(nextSet);
+      }
+
+      if (!spliceProcesoBatchToggleInDom(container, nodeId, pickerData.rows, nextSet, isSearching)) {
+        renderProcesoBatchChecklistInDom(true);
+      }
+    });
   };
 
   const renderProcesoBatchChecklistInDom = (preserveScroll: boolean): void => {
@@ -21602,16 +21676,12 @@ function bindAuthenticatedEvents(): void {
     const prevScrollTop = preserveScroll ? container.scrollTop : 0;
     const filterQuery = state.procesoDomain.batchFilterQuery || '';
     const isSearching = filterQuery.trim().length > 0;
-    const pickerData = buildProcesoBatchPickerRows({
+    const pickerData = getMemoizedProcesoBatchPickerData({
       cert: ctx.parentCert,
       currentProceso: ctx.currentProceso,
-      idNorma: ctx.currentProceso.id_norma,
-      normaCodigo: ctx.currentProceso.norma_codigo,
-      requirementsCatalog: ctx.catalogSnapshot,
+      catalogSnapshot: ctx.catalogSnapshot,
       mode: state.procesoDomain.batchMode || 'mandatory',
       filterQuery,
-      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
     });
     container.innerHTML = renderProcesoBatchChecklistRowsHtml({
       rows: pickerData.rows,
@@ -21624,13 +21694,11 @@ function bindAuthenticatedEvents(): void {
     if (preserveScroll) {
       container.scrollTop = prevScrollTop;
     }
-    bindProcesoBatchCheckboxListeners();
-    bindProcesoBatchToggleListeners();
+    bindProcesoBatchDelegatedListeners();
     refreshProcesoBatchSummaryInDom();
   };
 
-  bindProcesoBatchCheckboxListeners();
-  bindProcesoBatchToggleListeners();
+  bindProcesoBatchDelegatedListeners();
 
   document.getElementById('procesoBatchFilterInput')?.addEventListener('input', (ev) => {
     const query = (ev.target as HTMLInputElement).value;
@@ -21831,13 +21899,12 @@ function bindAuthenticatedEvents(): void {
             }
           }
           if (upsertRows.length > 0) {
-            const { error } = await supabase
-              .from('requisitos_por_proceso')
-              .upsert(upsertRows, {
-                onConflict: 'id_proceso,id_certificado_version,id_requisito',
-                ignoreDuplicates: true,
-              });
-            if (error && !isMissingTableOrSchemaError(error)) {
+            const { error } = await persistRequisitosPorProcesoInsert(
+              supabase as unknown as ProcesoReqSupabaseLike,
+              upsertRows,
+              REQUISITOS_POR_PROCESO_UPSERT_OPTIONS.onConflict
+            );
+            if (error) {
               rollbackProcesoRequirementsInClientState(
                 targetCertId,
                 procesoId,
@@ -21920,23 +21987,25 @@ function bindAuthenticatedEvents(): void {
           }
           if (STRICT_UUID_PATTERN.test(targetReqId)) {
             const targetCertVerId = await resolveCertActiveVersionIdForDb(targetCertId);
-            const { error: delErr } = await supabase
-              .from('requisitos_por_proceso')
-              .delete()
-              .match({
+            const { error: delErr } = await persistRequisitosPorProcesoDelete(
+              supabase as unknown as ProcesoReqSupabaseLike,
+              {
                 id_proceso: procesoId,
                 id_certificado: targetCertId,
-                ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
-                id_requisito: targetReqId,
-              });
-            if (delErr && !isMissingTableOrSchemaError(delErr)) {
+                id_certificado_version: targetCertVerId,
+                requisitoIds: [targetReqId],
+              }
+            );
+            if (delErr) {
               showFloatingToast(translateProcesoDbError(delErr), 'warning');
               void loadLiveCertificates();
               render();
             }
           }
-        } catch {
-          // Optimistic reactive fallback preserved
+        } catch (err) {
+          showFloatingToast(translateProcesoDbError(err), 'warning');
+          void loadLiveCertificates();
+          render();
         }
       })();
     }
@@ -27586,26 +27655,29 @@ function bindAuthenticatedEvents(): void {
                 ensureRequisitoInDb(req, catalogSnapshot),
                 resolveCertActiveVersionIdForDb(certId, parentCert),
               ]);
-              const { error } = await supabase.from('requisitos_por_proceso').upsert(
-                {
-                  id_proceso: procesoId,
-                  id_certificado: certId,
-                  ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
-                  id_requisito: dbReqId,
-                },
-                {
-                  onConflict: 'id_proceso,id_certificado_version,id_requisito',
-                  ignoreDuplicates: true,
-                }
+              const { error } = await persistRequisitosPorProcesoInsert(
+                supabase as unknown as ProcesoReqSupabaseLike,
+                [
+                  {
+                    id_proceso: procesoId,
+                    id_certificado: certId,
+                    ...(targetCertVerId ? { id_certificado_version: targetCertVerId } : {}),
+                    id_requisito: dbReqId,
+                  },
+                ],
+                REQUISITOS_POR_PROCESO_UPSERT_OPTIONS.onConflict
               );
-              if (error && !isMissingTableOrSchemaError(error)) {
+              if (error) {
                 rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
                 showFloatingToast(translateProcesoDbError(error), 'warning');
                 void loadLiveCertificates();
                 render();
               }
-            } catch {
-              // Optimistic reactive fallback preserved
+            } catch (err) {
+              rollbackProcesoRequirementsInClientState(certId, procesoId, [req.codigo]);
+              showFloatingToast(translateProcesoDbError(err), 'warning');
+              void loadLiveCertificates();
+              render();
             }
           })();
         }
@@ -27709,16 +27781,152 @@ function bindAuthenticatedEvents(): void {
       : null;
     const filterQuery = state.noAplicableDomain.clauseFilterQuery || '';
     const mode: NoAplicableClauseMode = state.noAplicableDomain.clauseMode || 'all';
-    const pickerRows = buildNoAplicablePickerRows({
+    const pickerRows = getMemoizedNoAplicablePickerRows({
       cert: selectedCert,
-      requirementsCatalog: reqCatalog,
+      catalogSnapshot: reqCatalog,
       currentNoAplicableId: currentNaId,
       mode,
       filterQuery,
-      archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
-      archivedProcesoIds: state.domainData.archivedProcesoIds,
     });
     return { draft, selectedCert, pickerRows, filterQuery };
+  };
+
+  const getNoAplicableExpandedSet = (rows: ReadonlyArray<NoAplicablePickerRow>): Set<string> => {
+    const isSearching = (state.noAplicableDomain.clauseFilterQuery || '').trim().length > 0;
+    const stored = isSearching
+      ? state.noAplicableDomain.searchExpandedClauseIds
+      : state.noAplicableDomain.expandedClauseIds;
+    return new Set(stored ?? getDefaultExpandedClauseIds(rows));
+  };
+
+  const spliceNoAplicableToggleInDom = (
+    container: HTMLElement,
+    nodeId: string,
+    rows: ReadonlyArray<NoAplicablePickerRow>,
+    expandedSet: Set<string>,
+    isSearching: boolean
+  ): boolean => {
+    const btn = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-action="toggle-no-aplicable-clause-node"]'
+      )
+    ).find((el) => (el.dataset.nodeId || '').trim() === nodeId);
+    const rowEl = btn?.closest<HTMLElement>('[data-na-clause-row="true"]');
+    if (!btn || !rowEl) return false;
+
+    const willExpand = expandedSet.has(nodeId);
+    btn.setAttribute('aria-expanded', willExpand ? 'true' : 'false');
+    btn.setAttribute('title', willExpand ? 'Contraer subcláusulas' : 'Desplegar subcláusulas');
+    const chevronSvg = btn.querySelector('svg');
+    if (chevronSvg) {
+      chevronSvg.classList.toggle('rotate-90', willExpand);
+    }
+
+    if (!willExpand) {
+      let next = rowEl.nextElementSibling as HTMLElement | null;
+      while (next && next.dataset.naClauseRow === 'true') {
+        const ancRaw = next.dataset.ancestorIds || '';
+        const ancList = ancRaw ? ancRaw.split(',') : [];
+        if (!ancList.includes(nodeId)) break;
+        const toRemove = next;
+        next = next.nextElementSibling as HTMLElement | null;
+        toRemove.remove();
+      }
+      return true;
+    }
+
+    const startIdx = rows.findIndex((r) => r.req.id === nodeId);
+    if (startIdx < 0) return false;
+    const rowsToInsert: NoAplicablePickerRow[] = [];
+    for (let i = startIdx + 1; i < rows.length; i += 1) {
+      const cand = rows[i];
+      if (!cand.ancestorIds.includes(nodeId)) break;
+      if (cand.ancestorIds.every((ancId) => expandedSet.has(ancId))) {
+        rowsToInsert.push(cand);
+      }
+    }
+
+    if (rowsToInsert.length > 0) {
+      const selectedReqId = readNoAplicableFormDraftFromDom().id_requisito;
+      const subsetHtml = renderNoAplicableRowsSubsetHtml({
+        rows: rowsToInsert,
+        selectedReqId,
+        expandedSet,
+        isSearching,
+      });
+      rowEl.insertAdjacentHTML('afterend', subsetHtml);
+    }
+    return true;
+  };
+
+  const bindNoAplicablePickerDelegatedListeners = (): void => {
+    const container = document.getElementById('naClauseChecklistContainer');
+    if (!container || container.dataset.delegatedBound === 'true') return;
+    container.dataset.delegatedBound = 'true';
+
+    container.addEventListener('click', (ev) => {
+      const target = ev.target as HTMLElement | null;
+      const toggleBtn = target?.closest<HTMLButtonElement>(
+        '[data-action="toggle-no-aplicable-clause-node"]'
+      );
+      if (!toggleBtn) return;
+
+      ev.preventDefault();
+      ev.stopPropagation();
+      const nodeId = (toggleBtn.dataset.nodeId || '').trim();
+      if (!nodeId) return;
+      const resolved = resolveActiveNoAplicablePickerData();
+      if (!resolved) return;
+
+      state.noAplicableDomain.formDraft = resolved.draft;
+      const isSearching = resolved.filterQuery.trim().length > 0;
+      const nextSet = getNoAplicableExpandedSet(resolved.pickerRows);
+      if (nextSet.has(nodeId)) {
+        nextSet.delete(nodeId);
+      } else {
+        nextSet.add(nodeId);
+      }
+      if (isSearching) {
+        state.noAplicableDomain.searchExpandedClauseIds = Array.from(nextSet);
+      } else {
+        state.noAplicableDomain.expandedClauseIds = Array.from(nextSet);
+      }
+
+      if (
+        !spliceNoAplicableToggleInDom(
+          container,
+          nodeId,
+          resolved.pickerRows,
+          nextSet,
+          isSearching
+        )
+      ) {
+        renderNoAplicableChecklistInDom(true);
+      }
+    });
+
+    container.addEventListener('change', (ev) => {
+      const target = ev.target as HTMLElement | null;
+      if (!(target instanceof HTMLInputElement) || target.name !== 'na_picker_requisito') {
+        return;
+      }
+      if (!target.checked) return;
+      const hiddenReq = document.getElementById('naSelectRequisito') as HTMLInputElement | null;
+      if (hiddenReq) {
+        hiddenReq.value = target.value;
+      }
+      const prevScrollTop = container.scrollTop;
+      state.noAplicableDomain.formDraft = {
+        ...readNoAplicableFormDraftFromDom(),
+        id_requisito: target.value,
+      };
+      state.noAplicableDomain.editErrorMessage = null;
+      render();
+      const nextContainer = document.getElementById('naClauseChecklistContainer');
+      if (nextContainer) {
+        nextContainer.scrollTop = prevScrollTop;
+      }
+    });
   };
 
   const renderNoAplicableChecklistInDom = (preserveScroll: boolean): void => {
@@ -27739,72 +27947,10 @@ function bindAuthenticatedEvents(): void {
     if (preserveScroll) {
       container.scrollTop = prevScrollTop;
     }
-    bindNoAplicablePickerRowListeners();
+    bindNoAplicablePickerDelegatedListeners();
   };
 
-  const bindNoAplicablePickerRowListeners = (): void => {
-    document
-      .querySelectorAll<HTMLButtonElement>(
-        '#naClauseChecklistContainer [data-action="toggle-no-aplicable-clause-node"]'
-      )
-      .forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const nodeId = (btn.dataset.nodeId || '').trim();
-          if (!nodeId) return;
-          const resolved = resolveActiveNoAplicablePickerData();
-          if (!resolved) return;
-          state.noAplicableDomain.formDraft = resolved.draft;
-          const isSearching = resolved.filterQuery.trim().length > 0;
-          const currentIds = isSearching
-            ? state.noAplicableDomain.searchExpandedClauseIds ??
-              getDefaultExpandedClauseIds(resolved.pickerRows)
-            : state.noAplicableDomain.expandedClauseIds ??
-              getDefaultExpandedClauseIds(resolved.pickerRows);
-          const nextSet = new Set(currentIds);
-          if (nextSet.has(nodeId)) {
-            nextSet.delete(nodeId);
-          } else {
-            nextSet.add(nodeId);
-          }
-          if (isSearching) {
-            state.noAplicableDomain.searchExpandedClauseIds = Array.from(nextSet);
-          } else {
-            state.noAplicableDomain.expandedClauseIds = Array.from(nextSet);
-          }
-          renderNoAplicableChecklistInDom(true);
-        });
-      });
-
-    document
-      .querySelectorAll<HTMLInputElement>(
-        '#naClauseChecklistContainer input[name="na_picker_requisito"]'
-      )
-      .forEach((radio) => {
-        radio.addEventListener('change', () => {
-          if (!radio.checked) return;
-          const hiddenReq = document.getElementById('naSelectRequisito') as HTMLInputElement | null;
-          if (hiddenReq) {
-            hiddenReq.value = radio.value;
-          }
-          const prevScrollTop =
-            document.getElementById('naClauseChecklistContainer')?.scrollTop ?? 0;
-          state.noAplicableDomain.formDraft = {
-            ...readNoAplicableFormDraftFromDom(),
-            id_requisito: radio.value,
-          };
-          state.noAplicableDomain.editErrorMessage = null;
-          render();
-          const nextContainer = document.getElementById('naClauseChecklistContainer');
-          if (nextContainer) {
-            nextContainer.scrollTop = prevScrollTop;
-          }
-        });
-      });
-  };
-
-  bindNoAplicablePickerRowListeners();
+  bindNoAplicablePickerDelegatedListeners();
 
   document.getElementById('naClauseFilterInput')?.addEventListener('input', (ev) => {
     const query = (ev.target as HTMLInputElement).value;
@@ -27813,6 +27959,30 @@ function bindAuthenticatedEvents(): void {
     state.noAplicableDomain.searchExpandedClauseIds = undefined;
     renderNoAplicableChecklistInDom(false);
   });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-no-aplicable-selection"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const prevScrollTop =
+          document.getElementById('naClauseChecklistContainer')?.scrollTop ?? 0;
+        const hiddenReq = document.getElementById('naSelectRequisito') as HTMLInputElement | null;
+        if (hiddenReq) {
+          hiddenReq.value = '';
+        }
+        const draft = readNoAplicableFormDraftFromDom();
+        state.noAplicableDomain.formDraft = {
+          ...draft,
+          id_requisito: '',
+        };
+        state.noAplicableDomain.editErrorMessage = null;
+        render();
+        const nextContainer = document.getElementById('naClauseChecklistContainer');
+        if (nextContainer) {
+          nextContainer.scrollTop = prevScrollTop;
+        }
+      });
+    });
 
   document
     .querySelectorAll<HTMLElement>('[data-action="set-no-aplicable-clause-mode"]')
@@ -27899,7 +28069,7 @@ function bindAuthenticatedEvents(): void {
     render();
   });
 
-  document.getElementById('cancelNoAplicableBtn')?.addEventListener('click', () => {
+  const cancelNoAplicableEditing = (): void => {
     if (state.noAplicableDomain.isCreating) {
       backtrackToParentBreadcrumb();
       render();
@@ -27909,7 +28079,14 @@ function bindAuthenticatedEvents(): void {
     state.noAplicableDomain.formDraft = undefined;
     state.noAplicableDomain.editErrorMessage = null;
     render();
-  });
+  };
+
+  document.getElementById('cancelNoAplicableBtn')?.addEventListener('click', cancelNoAplicableEditing);
+  document
+    .querySelectorAll<HTMLElement>('[data-action="cancel-no-aplicable-footer"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', cancelNoAplicableEditing);
+    });
 
   document.getElementById('noAplicableDetailForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -36778,6 +36955,143 @@ function refreshCoverageCachesForCert(certId: string, targetVersionId?: string):
   state.exploration.records = state.exploration.records.map((rec) =>
     rec.id === certId ? { ...rec, ...searchSnap } : rec
   );
+}
+
+const REQUISITOS_POR_PROCESO_UPSERT_OPTIONS = {
+  onConflict: 'id_proceso,id_certificado_version,id_requisito',
+  ignoreDuplicates: true,
+} as const;
+
+let procesoBatchPickerMemo: {
+  certRef: CertificadoDetailEntity | undefined;
+  procesoId: string;
+  requisitosSig: string;
+  catalogRef: ReadonlyArray<RequisitoLtree>;
+  catalogLen: number;
+  mode: ProcesoBatchMode;
+  filterQuery: string;
+  archivedProcesoSize: number;
+  archivedNoAplicableSize: number;
+  result: BuildProcesoBatchPickerResult;
+} | null = null;
+
+function getMemoizedProcesoBatchPickerData(params: {
+  cert?: CertificadoDetailEntity;
+  currentProceso: ProcesoDetailEntity;
+  catalogSnapshot: ReadonlyArray<RequisitoLtree>;
+  mode: ProcesoBatchMode;
+  filterQuery: string;
+}): BuildProcesoBatchPickerResult {
+  const { cert, currentProceso, catalogSnapshot, mode, filterQuery } = params;
+  const requisitosSig = currentProceso.requisitos
+    .map((r) => `${r.id_requisito}:${r.codigo}`)
+    .join('|');
+  const archivedProcesoSize = state.domainData.archivedProcesoIds.size;
+  const archivedNoAplicableSize = state.domainData.archivedNoAplicableIds.size;
+
+  if (
+    procesoBatchPickerMemo &&
+    procesoBatchPickerMemo.certRef === cert &&
+    procesoBatchPickerMemo.procesoId === currentProceso.id &&
+    procesoBatchPickerMemo.requisitosSig === requisitosSig &&
+    procesoBatchPickerMemo.catalogRef === catalogSnapshot &&
+    procesoBatchPickerMemo.catalogLen === catalogSnapshot.length &&
+    procesoBatchPickerMemo.mode === mode &&
+    procesoBatchPickerMemo.filterQuery === filterQuery &&
+    procesoBatchPickerMemo.archivedProcesoSize === archivedProcesoSize &&
+    procesoBatchPickerMemo.archivedNoAplicableSize === archivedNoAplicableSize
+  ) {
+    return procesoBatchPickerMemo.result;
+  }
+
+  const result = buildProcesoBatchPickerRows({
+    cert,
+    currentProceso,
+    idNorma: currentProceso.id_norma,
+    normaCodigo: currentProceso.norma_codigo,
+    requirementsCatalog: catalogSnapshot,
+    mode,
+    filterQuery,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+  });
+
+  procesoBatchPickerMemo = {
+    certRef: cert,
+    procesoId: currentProceso.id,
+    requisitosSig,
+    catalogRef: catalogSnapshot,
+    catalogLen: catalogSnapshot.length,
+    mode,
+    filterQuery,
+    archivedProcesoSize,
+    archivedNoAplicableSize,
+    result,
+  };
+
+  return result;
+}
+
+let naPickerMemo: {
+  certRef: CertificadoDetailEntity;
+  currentNoAplicableId: string | null;
+  catalogRef: ReadonlyArray<RequisitoLtree>;
+  catalogLen: number;
+  mode: NoAplicableClauseMode;
+  filterQuery: string;
+  archivedProcesoSize: number;
+  archivedNoAplicableSize: number;
+  rows: NoAplicablePickerRow[];
+} | null = null;
+
+function getMemoizedNoAplicablePickerRows(params: {
+  cert: CertificadoDetailEntity;
+  catalogSnapshot: ReadonlyArray<RequisitoLtree>;
+  currentNoAplicableId: string | null;
+  mode: NoAplicableClauseMode;
+  filterQuery: string;
+}): NoAplicablePickerRow[] {
+  const { cert, catalogSnapshot, currentNoAplicableId, mode, filterQuery } = params;
+  const archivedProcesoSize = state.domainData.archivedProcesoIds.size;
+  const archivedNoAplicableSize = state.domainData.archivedNoAplicableIds.size;
+
+  if (
+    naPickerMemo &&
+    naPickerMemo.certRef === cert &&
+    naPickerMemo.currentNoAplicableId === currentNoAplicableId &&
+    naPickerMemo.catalogRef === catalogSnapshot &&
+    naPickerMemo.catalogLen === catalogSnapshot.length &&
+    naPickerMemo.mode === mode &&
+    naPickerMemo.filterQuery === filterQuery &&
+    naPickerMemo.archivedProcesoSize === archivedProcesoSize &&
+    naPickerMemo.archivedNoAplicableSize === archivedNoAplicableSize
+  ) {
+    return naPickerMemo.rows;
+  }
+
+  const rows = buildNoAplicablePickerRows({
+    cert,
+    requirementsCatalog: catalogSnapshot,
+    currentNoAplicableId,
+    mode,
+    filterQuery,
+    archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+    archivedProcesoIds: state.domainData.archivedProcesoIds,
+  });
+
+  naPickerMemo = {
+    certRef: cert,
+    currentNoAplicableId,
+    catalogRef: catalogSnapshot,
+    catalogLen: catalogSnapshot.length,
+    mode,
+    filterQuery,
+    archivedProcesoSize,
+    archivedNoAplicableSize,
+    rows,
+  };
+
+  return rows;
 }
 
 async function loadLiveCertificates(): Promise<void> {

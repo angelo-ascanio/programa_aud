@@ -945,39 +945,22 @@ function getBatchRowIndentClass(level: number): string {
   return BATCH_TREE_INDENT_CLASSES[clamped] || 'pl-2.5';
 }
 
-export function renderProcesoBatchChecklistRowsHtml(params: {
+export function renderProcesoBatchRowsSubsetHtml(params: {
   rows: ReadonlyArray<ProcesoBatchPickerRow>;
   selectedIdSet: ReadonlySet<string>;
-  expandedBatchClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
-  filterQuery?: string;
+  expandedSet: ReadonlySet<string>;
+  isSearching: boolean;
 }): string {
-  const { rows, selectedIdSet, expandedBatchClauseIds } = params;
-  const effectiveExpandedSet =
-    expandedBatchClauseIds === undefined
-      ? new Set(getDefaultExpandedClauseIds(rows))
-      : expandedBatchClauseIds instanceof Set
-      ? expandedBatchClauseIds
-      : new Set(expandedBatchClauseIds);
-  const visibleRows = filterVisibleHierarchyRows(rows, expandedBatchClauseIds);
+  const { rows, selectedIdSet, expandedSet, isSearching } = params;
 
-  if (visibleRows.length === 0) {
-    return `
-      <div class="p-6 text-center text-xs text-slate-500">
-        No se encontraron cláusulas que coincidan con el filtro seleccionado.
-      </div>
-    `;
-  }
-
-  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
-
-  return visibleRows
+  return rows
     .map((row) => {
       const indentClass = getBatchRowIndentClass(
         isSearching ? (row.ancestorIds?.length || 0) + 1 : row.indentLevel
       );
       const isChecked = !row.disabled && selectedIdSet.has(row.req.id);
       const isCollapsible = row.hasChildren;
-      const isExpanded = isCollapsible && effectiveExpandedSet.has(row.req.id);
+      const isExpanded = isCollapsible && expandedSet.has(row.req.id);
 
       const statusBadges: string[] = [];
       if (row.isExcludedByIso43) {
@@ -1034,9 +1017,10 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
         ? `${row.req.codigo} ${row.titleText}:`
         : row.req.codigo;
       const tooltipText = row.rawText ? `${leadText} ${row.rawText}` : leadText;
+      const primaryColorClass = row.disabled ? 'text-slate-500' : 'text-slate-900';
       const primaryLeadHtml = row.hasTitle
-        ? `<span class="font-bold ${row.disabled ? 'text-slate-500' : 'text-slate-900'}"><span class="font-mono ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
-        : `<span class="font-mono font-bold ${row.disabled ? 'text-slate-500' : 'text-sky-800'}">${escapeHtml(row.req.codigo)}</span>`;
+        ? `<span class="font-bold ${primaryColorClass}"><span class="font-mono">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
+        : `<span class="font-mono font-bold ${primaryColorClass}">${escapeHtml(row.req.codigo)}</span>`;
       const rawTextHtml = row.rawText
         ? ` <span class="font-normal ${row.disabled ? 'text-slate-400' : 'text-slate-500'}">${escapeHtml(row.rawText)}</span>`
         : '';
@@ -1046,6 +1030,7 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
           data-batch-clause-row="true"
           data-requisito-id="${escapeHtml(row.req.id)}"
           data-codigo="${escapeHtml(row.req.codigo)}"
+          data-ancestor-ids="${escapeHtml((row.ancestorIds || []).join(','))}"
           class="flex items-center justify-between gap-2 py-2 pr-3 ${indentClass} ${
             row.disabled
               ? 'bg-slate-50/70 text-slate-400 opacity-85'
@@ -1082,6 +1067,38 @@ export function renderProcesoBatchChecklistRowsHtml(params: {
       `;
     })
     .join('');
+}
+
+export function renderProcesoBatchChecklistRowsHtml(params: {
+  rows: ReadonlyArray<ProcesoBatchPickerRow>;
+  selectedIdSet: ReadonlySet<string>;
+  expandedBatchClauseIds?: ReadonlySet<string> | ReadonlyArray<string>;
+  filterQuery?: string;
+}): string {
+  const { rows, selectedIdSet, expandedBatchClauseIds } = params;
+  const effectiveExpandedSet =
+    expandedBatchClauseIds === undefined
+      ? new Set(getDefaultExpandedClauseIds(rows))
+      : expandedBatchClauseIds instanceof Set
+      ? expandedBatchClauseIds
+      : new Set(expandedBatchClauseIds);
+  const visibleRows = filterVisibleHierarchyRows(rows, expandedBatchClauseIds);
+
+  if (visibleRows.length === 0) {
+    return `
+      <div class="p-6 text-center text-xs text-slate-500">
+        No se encontraron cláusulas que coincidan con el filtro seleccionado.
+      </div>
+    `;
+  }
+
+  const isSearching = Boolean(params.filterQuery && params.filterQuery.trim().length > 0);
+  return renderProcesoBatchRowsSubsetHtml({
+    rows: visibleRows,
+    selectedIdSet,
+    expandedSet: effectiveExpandedSet,
+    isSearching,
+  });
 }
 
 export function renderProcesoBatchSummaryText(summary: {
