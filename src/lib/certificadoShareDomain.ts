@@ -613,6 +613,7 @@ export interface TurnoCertLinkDraft {
   id_turno: string;
   turno_label: string;
   id_certificado: string;
+  id_certificado_version?: string | null;
   id_certificado_origen: string;
   target_numero_certificado: string;
   target_organizacion_nombre: string;
@@ -922,10 +923,17 @@ export function planShareTurnos(
         const linkKey = `${shift.id.trim()}::${rawTargetId}`;
         if (!seenPlannedCertLinks.has(linkKey)) {
           seenPlannedCertLinks.add(linkKey);
+          const rawTargetVer =
+            targetCertEntity?.versiones?.find((v) => v.es_version_actual && !v.deleted_at)?.id ||
+            targetCertEntity?.id_certificado_version ||
+            null;
+          const targetVerId =
+            rawTargetVer && isValidUuid(rawTargetVer) ? rawTargetVer.trim() : null;
           certLinksToCreate.push({
             id_turno: shift.id.trim(),
             turno_label: shiftLabel,
             id_certificado: rawTargetId,
+            ...(targetVerId ? { id_certificado_version: targetVerId } : {}),
             id_certificado_origen: sourceCert.id.trim(),
             target_numero_certificado: eligibleTarget.numero_certificado,
             target_organizacion_nombre: eligibleTarget.organizacion_nombre,

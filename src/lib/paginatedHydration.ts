@@ -1143,14 +1143,46 @@ function scopeTurnosByVersionSitios(
   turnos: ReadonlyArray<ShiftEntity>,
   versionSites: ReadonlyArray<SiteEntity>,
   versionId: string,
-  activeVersionId: string
+  activeVersionId: string,
+  allCertSites: ReadonlyArray<SiteEntity> = versionSites
 ): ShiftEntity[] {
   const versionSiteIds = new Set(versionSites.map((s) => s.id));
+  const versionSiteNames = new Set(
+    versionSites.map((s) => (s.nombre_sitio || '').trim().toLowerCase()).filter(Boolean)
+  );
+  const versionTurnoIdsFromSites = new Set<string>();
+  for (const s of versionSites) {
+    for (const tps of s.turnos_por_sitio || []) {
+      if (!tps.deleted_at && tps.id_turno) {
+        versionTurnoIdsFromSites.add(tps.id_turno);
+      }
+    }
+  }
+  const allSiteLinkedTurnoIds = new Set<string>();
+  for (const s of allCertSites) {
+    for (const tps of s.turnos_por_sitio || []) {
+      if (!tps.deleted_at && tps.id_turno) {
+        allSiteLinkedTurnoIds.add(tps.id_turno);
+      }
+    }
+  }
+
   return turnos.filter((turno) => {
     if (turno.id_certificado_version) {
       return turno.id_certificado_version === versionId;
     }
-    if ((turno.sitios_vinculados || []).some((sid) => versionSiteIds.has(sid))) {
+    if (allSiteLinkedTurnoIds.has(turno.id)) {
+      return versionTurnoIdsFromSites.has(turno.id);
+    }
+    if (
+      (turno.sitios_vinculados || []).some((sidOrName) => {
+        const clean = (sidOrName || '').trim();
+        return (
+          versionSiteIds.has(clean) ||
+          (clean.length > 0 && versionSiteNames.has(clean.toLowerCase()))
+        );
+      })
+    ) {
       return true;
     }
     return versionId === activeVersionId && (turno.sitios_vinculados || []).length === 0;
@@ -1264,7 +1296,8 @@ export function assembleCertificateVersionsAndChildCollections(params: {
         cert.turnos,
         versionSitios,
         verId,
-        activeVersionId
+        activeVersionId,
+        cert.sitios
       );
       const versionNoAplicables = scopeVersionChildItems(
         cert.noAplicables,

@@ -1546,3 +1546,36 @@ test('Step 2.3: planShareAlcance classifies SIN_ALCANCE, YA_MISMO_ALCANCE, CONFL
   );
 });
 
+test('planShareTurnos populates id_certificado_version across multiple target certificates when active version UUIDs are present', () => {
+  const allCertificates = buildScenarioCertificates();
+  const certX = allCertificates[0];
+  const verYId = '41000000-0000-0000-0000-000000000102';
+  const verZId = '41000000-0000-0000-0000-000000000103';
+
+  const updatedCerts = allCertificates.map((c) => {
+    if (c.id === CERT_Y_ID) return { ...c, id_certificado_version: verYId };
+    if (c.id === CERT_Z_ORG_A_ID) return { ...c, id_certificado_version: verZId };
+    return c;
+  });
+
+  const plan = planShareTurnos({
+    sourceCert: certX,
+    selectedTurnoIds: [TURNO_1_ID, TURNO_2_ID],
+    targetCertIds: [CERT_Y_ID, CERT_Z_ORG_A_ID],
+    allCertificates: updatedCerts,
+    organizaciones: ORGANIZACIONES,
+    conglomerados: CONGLOMERADOS,
+    profile: ADMIN_PROFILE,
+  });
+
+  assert.equal(plan.isExecutable, true);
+  assert.equal(plan.certLinksToCreate.length, 4);
+  const yLinks = plan.certLinksToCreate.filter((l) => l.id_certificado === CERT_Y_ID);
+  const zLinks = plan.certLinksToCreate.filter((l) => l.id_certificado === CERT_Z_ORG_A_ID);
+  assert.equal(yLinks.length, 2);
+  assert.equal(zLinks.length, 2);
+  assert.equal(yLinks.every((l) => l.id_certificado_version === verYId), true);
+  assert.equal(zLinks.every((l) => l.id_certificado_version === verZId), true);
+});
+
+

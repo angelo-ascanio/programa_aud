@@ -755,6 +755,7 @@ import {
   createTurnoFormDraftFromEntity,
   formatTurnoTime,
   loadCustomTurnoDescriptions,
+  propagateSharedTurnoDescriptions,
   resolveCustomTurnoDescription,
   resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
@@ -22899,6 +22900,21 @@ function bindAuthenticatedEvents(): void {
         certId: upsertPlan.activeCertId || upsertPlan.siteOwnerCertId || null,
         saveGlobalFallback: !resolvedExistingCatalogReuse,
       });
+      if (
+        upsertPlan.needsTurnosPorSitioInsert &&
+        upsertPlan.siteOwnerCertId &&
+        upsertPlan.siteOwnerCertId !== upsertPlan.activeCertId
+      ) {
+        const currentCustomMap = loadCustomTurnoDescriptions();
+        if (!currentCustomMap[`${upsertPlan.siteOwnerCertId}::${resolvedTurnoId}`]) {
+          saveCustomTurnoDescription({
+            turnoId: resolvedTurnoId,
+            descripcion: normTurno.descripcion,
+            certId: upsertPlan.siteOwnerCertId,
+            saveGlobalFallback: false,
+          });
+        }
+      }
 
       const affectedCertIds = new Set<string>(
         [upsertPlan.siteOwnerCertId || '', upsertPlan.activeCertId || ''].filter(Boolean)
@@ -33532,6 +33548,12 @@ function bindPhase5AuditoriasEvents(): void {
 
       const certCount = plan.certLinksToCreate.length;
       const siteCount = plan.turnosPorSitioToCreate.length;
+      propagateSharedTurnoDescriptions({
+        sourceCert,
+        turnoIds: state.shareModal.selectedItemIds,
+        targetCertIds: state.shareModal.selectedTargetCertIds,
+        shiftCatalog: state.domainData.shiftCatalog,
+      });
       state.shareModal = createInitialShareModalState('turno', '');
       await loadLiveCertificates();
       showFloatingToast(
@@ -33718,6 +33740,15 @@ function bindPhase5AuditoriasEvents(): void {
     const turnoCount = sitioPlan.turnoCertLinksToCreate.length;
     const procCount = procesoShares.length;
     const affectedCoverageCertIds = new Set(procesoShares.map((p) => p.id_certificado));
+
+    if (sitioPlan.turnoCertLinksToCreate.length > 0) {
+      propagateSharedTurnoDescriptions({
+        sourceCert,
+        turnoIds: sitioPlan.turnoCertLinksToCreate.map((l) => l.id_turno),
+        targetCertIds: sitioPlan.turnoCertLinksToCreate.map((l) => l.id_certificado),
+        shiftCatalog: state.domainData.shiftCatalog,
+      });
+    }
 
     state.shareModal = createInitialShareModalState('sitio', '');
     await loadLiveCertificates();
@@ -37978,6 +38009,7 @@ async function loadLiveCertificates(): Promise<void> {
                   const resolvedDesc = resolveCustomTurnoDescription({
                     turnoId: dbTurno.id,
                     certId,
+                    originCertId: dbTurno.sharedFromCertId || dbTurno.ownerCertId || null,
                     hora_entrada: dbTurno.hora_entrada,
                     hora_salida: dbTurno.hora_salida,
                     currentDescripcion: dbTurno.descripcion,
@@ -38778,6 +38810,7 @@ async function loadDomainData(): Promise<void> {
           const nextDesc = resolveCustomTurnoDescription({
             turnoId: t.id,
             certId: cert.id,
+            originCertId: t.sharedFromCertId || t.ownerCertId || null,
             hora_entrada: t.hora_entrada,
             hora_salida: t.hora_salida,
             currentDescripcion: t.descripcion,

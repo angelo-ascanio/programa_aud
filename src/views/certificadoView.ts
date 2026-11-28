@@ -3495,8 +3495,6 @@ function renderTurnosChildTab(
         return t.descripcion;
       case 'horario':
         return `${t.hora_entrada}-${t.hora_salida}`;
-      case 'empleados_activos':
-        return t.empleados_activos ?? -1;
       case 'sitios_vinculados':
         return t.sitios_vinculados.join(', ');
       default:
@@ -3509,7 +3507,7 @@ function renderTurnosChildTab(
       id: 'descripcion',
       header: 'Turno Operativo',
       sortable: true,
-      defaultWidthPct: 28,
+      defaultWidthPct: 36,
       minWidthPx: 140,
       renderCell: (turno) => {
         const isSharedFromOther = Boolean(turno.sharedFromCertId);
@@ -3533,7 +3531,7 @@ function renderTurnosChildTab(
       id: 'horario',
       header: 'Horario',
       sortable: true,
-      defaultWidthPct: 22,
+      defaultWidthPct: 24,
       minWidthPx: 120,
       renderCell: (turno) => `
         <span class="font-mono font-semibold text-indigo-700 tabular-nums">
@@ -3542,23 +3540,10 @@ function renderTurnosChildTab(
       `,
     },
     {
-      id: 'empleados_activos',
-      header: 'Personal',
-      align: 'center',
-      sortable: true,
-      defaultWidthPct: 16,
-      minWidthPx: 90,
-      renderCell: (turno) => `
-        <span class="font-mono text-slate-700 tabular-nums">
-          ${turno.empleados_activos !== undefined ? `${turno.empleados_activos} trabajadores` : 'Estándar'}
-        </span>
-      `,
-    },
-    {
       id: 'sitios_vinculados',
       header: 'Sedes Vinculadas',
       sortable: true,
-      defaultWidthPct: 34,
+      defaultWidthPct: 40,
       minWidthPx: 150,
       renderCell: (turno) => `
         <div class="flex items-center gap-1 overflow-hidden" title="${escapeHtml(turno.sitios_vinculados.join(', '))}">

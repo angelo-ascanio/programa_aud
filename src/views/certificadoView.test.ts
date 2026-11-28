@@ -78,7 +78,7 @@ function buildCertDetailState(
 function assertTableStructuralInvariants(html: string, tableId: string): void {
   const escapedId = tableId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const tableRegex = new RegExp(
-    `<table[^>]*id="${escapedId}"[^>]*>[\\s\\S]*?<\\/table>`,
+    `<table[^>]*(?:id|data-resizable-table)="${escapedId}"[^>]*>[\\s\\S]*?<\\/table>`,
     'i'
   );
   const tableMatch = html.match(tableRegex);
@@ -584,4 +584,54 @@ test('Step 3.3 Certificate Versioning & 4-Category Audit Migration Modal: #certV
   assert.equal(/\bdisabled\b/i.test(confirmReadyOpenTagWithoutClass), false);
   assert.equal(assertZeroUuidExposure(readyModalHtml).compliant, true);
 });
+
+test('certificadoView Turno child tab removes Personal column while preserving 3 balanced columns and Sitio Personal column', () => {
+  const seed = INITIAL_ALL_SEEDED_CERTIFICADOS_DETAILED[0];
+  const baseCert: CertificadoDetailEntity = {
+    ...seed,
+    turnos:
+      seed.turnos.length > 0
+        ? seed.turnos
+        : [
+            {
+              id: '70000000-0000-0000-0000-000000000004',
+              hora_entrada: '08:00:00',
+              hora_salida: '17:00:00',
+              descripcion: 'Administrativo 08-17',
+              sitios_vinculados: ['Planta Principal'],
+            },
+          ],
+  };
+
+  const turnosHtml = renderCertificadoDetailPage({
+    cert: baseCert,
+    profile: ADMIN_PROFILE,
+    state: buildCertDetailState(baseCert.id, 'turnos'),
+    allCertificates: [baseCert],
+  });
+
+  assertTableStructuralInvariants(turnosHtml, 'cert-tab-turnos');
+  const turnoTableMatch = turnosHtml.match(
+    /<table[^>]*data-resizable-table="cert-tab-turnos"[^>]*>[\s\S]*?<\/table>/i
+  );
+  assert.ok(turnoTableMatch);
+  const turnoTable = turnoTableMatch[0];
+  assert.ok(turnoTable.includes('Turno Operativo'));
+  assert.ok(turnoTable.includes('Horario'));
+  assert.ok(turnoTable.includes('Sedes Vinculadas'));
+  assert.equal(turnoTable.includes('data-sort-col="empleados_activos"'), false);
+  assert.equal(turnoTable.includes('>Personal<'), false);
+  assert.equal(assertZeroUuidExposure(turnosHtml).compliant, true);
+
+  // Sitio child tab continues to render Personal column unaffected
+  const sitiosHtml = renderCertificadoDetailPage({
+    cert: baseCert,
+    profile: ADMIN_PROFILE,
+    state: buildCertDetailState(baseCert.id, 'sitios'),
+    allCertificates: [baseCert],
+  });
+  assertTableStructuralInvariants(sitiosHtml, 'cert-tab-sitios');
+  assert.ok(sitiosHtml.includes('data-sort-col="personal_count"'));
+});
+
 

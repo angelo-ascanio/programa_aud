@@ -1510,6 +1510,7 @@ export function isGenericTurnoDescription(
 export function resolveCustomTurnoDescription(params: {
   turnoId: string;
   certId?: string | null;
+  originCertId?: string | null;
   hora_entrada: string;
   hora_salida: string;
   currentDescripcion?: string | null;
@@ -1521,6 +1522,12 @@ export function resolveCustomTurnoDescription(params: {
   if (certId) {
     const scoped = customMap[`${certId}::${params.turnoId}`];
     if (scoped) return scoped;
+  }
+
+  const originCertId = (params.originCertId || '').trim();
+  if (originCertId && originCertId !== certId) {
+    const originScoped = customMap[`${originCertId}::${params.turnoId}`];
+    if (originScoped) return originScoped;
   }
 
   const seedMatch = INITIAL_TURNO_CATALOG.find((t) => t.id === params.turnoId);
@@ -1547,6 +1554,67 @@ export function resolveCustomTurnoDescription(params: {
   }
 
   return `Turno ${formatTurnoTime(params.hora_entrada)} – ${formatTurnoTime(params.hora_salida)}`;
+}
+
+export function propagateSharedTurnoDescriptions(params: {
+  sourceCert: Pick<CertificadoDetailEntity, 'id' | 'turnos'>;
+  turnoIds: ReadonlyArray<string>;
+  targetCertIds: ReadonlyArray<string>;
+  shiftCatalog?: ReadonlyArray<TurnoCatalogItem>;
+}): CustomTurnoDescriptionMap {
+  const customMap = loadCustomTurnoDescriptions();
+  const sourceShiftById = new Map(
+    (params.sourceCert.turnos || []).map((t) => [t.id.trim(), t])
+  );
+  const cleanTurnoIds = Array.from(
+    new Set(params.turnoIds.map((id) => id.trim()).filter(Boolean))
+  );
+  const cleanTargetIds = Array.from(
+    new Set(params.targetCertIds.map((id) => id.trim()).filter(Boolean))
+  );
+
+  let latestMap = customMap;
+  for (const turnoId of cleanTurnoIds) {
+    const sourceShift = sourceShiftById.get(turnoId);
+    const scopedSource = customMap[`${params.sourceCert.id.trim()}::${turnoId}`];
+    const resolvedDesc =
+      scopedSource ||
+      (sourceShift
+        ? resolveCustomTurnoDescription({
+            turnoId,
+            certId: params.sourceCert.id,
+            originCertId: sourceShift.sharedFromCertId || sourceShift.ownerCertId || null,
+            hora_entrada: sourceShift.hora_entrada,
+            hora_salida: sourceShift.hora_salida,
+            currentDescripcion: sourceShift.descripcion,
+            shiftCatalog: params.shiftCatalog,
+            customMap,
+          })
+        : '');
+
+    if (
+      !resolvedDesc ||
+      (sourceShift &&
+        isGenericTurnoDescription(
+          resolvedDesc,
+          sourceShift.hora_entrada,
+          sourceShift.hora_salida
+        ))
+    ) {
+      continue;
+    }
+
+    for (const targetCertId of cleanTargetIds) {
+      if (targetCertId === params.sourceCert.id.trim()) continue;
+      latestMap = saveCustomTurnoDescription({
+        turnoId,
+        descripcion: resolvedDesc,
+        certId: targetCertId,
+        saveGlobalFallback: false,
+      });
+    }
+  }
+  return latestMap;
 }
 
 export type TurnoUpsertAction =

@@ -663,6 +663,123 @@ describe('Step 3.1 Versioned Org/Cert & Bilingual Alcance Hydration', () => {
     assert.equal(auditMetaHistorical.id_certificado_version, '41000000-0000-0000-0000-000000000002');
     assert.equal(auditMetaHistorical.version_numero, 1);
   });
+
+  it('preserves owned unversioned turnos matched by site name or turnos_por_sitio while isolating v1-only site shifts', () => {
+    const baseSeed = INITIAL_CERTIFICADOS_DETAILED.find(
+      (c) => c.id === '40000000-0000-0000-0000-000000000002'
+    )!;
+    const v1Id = '41000000-0000-0000-0000-000000000091';
+    const v2Id = '41000000-0000-0000-0000-000000000092';
+    const siteCadiproId = '6efe5ad5-81a8-4a06-8107-1b7b65712ca7';
+    const siteV1Id = '50000000-0000-0000-0000-000000000991';
+    const ownedTurnoId = '70000000-0000-0000-0000-000000000004';
+    const nameMatchedTurnoId = '70000000-0000-0000-0000-000000000995';
+    const v1OnlyTurnoId = '70000000-0000-0000-0000-000000000996';
+
+    const cert9001Style: CertificadoDetailEntity = {
+      ...baseSeed,
+      id: '14c1c36d-636e-437e-97ba-08ad845908f1',
+      numero_certificado: '9001-885-03-10-2020',
+      sitios: [
+        {
+          id: siteCadiproId,
+          id_certificado: '14c1c36d-636e-437e-97ba-08ad845908f1',
+          id_certificado_version: v2Id,
+          numero_sitio: 0,
+          nombre_sitio: 'Planta CADIPRO',
+          direccion_sitio: 'Táchira',
+          tipo_sitio: 'Sede Principal',
+          personal_count: 102,
+          turnos_por_sitio: [
+            {
+              id: '72000000-0000-0000-0000-000000000991',
+              id_sitio: siteCadiproId,
+              id_turno: ownedTurnoId,
+              hora_entrada: '08:00:00',
+              hora_salida: '17:00:00',
+              descripcion: 'Administrativo 08-17',
+              deleted_at: null,
+            },
+          ],
+        },
+        {
+          id: siteV1Id,
+          id_certificado: '14c1c36d-636e-437e-97ba-08ad845908f1',
+          id_certificado_version: v1Id,
+          numero_sitio: 1,
+          nombre_sitio: 'Sede Histórica v1',
+          direccion_sitio: 'Antigua Sede',
+          tipo_sitio: 'Sucursal',
+          personal_count: 25,
+          turnos_por_sitio: [
+            {
+              id: '72000000-0000-0000-0000-000000000992',
+              id_sitio: siteV1Id,
+              id_turno: v1OnlyTurnoId,
+              hora_entrada: '22:00:00',
+              hora_salida: '06:00:00',
+              descripcion: 'Nocturno Histórico',
+              deleted_at: null,
+            },
+          ],
+        },
+      ],
+      turnos: [
+        {
+          id: ownedTurnoId,
+          hora_entrada: '08:00:00',
+          hora_salida: '17:00:00',
+          descripcion: 'Administrativo 08-17',
+          sitios_vinculados: ['Planta CADIPRO'],
+          // Notice: id_certificado_version intentionally undefined (owned shift from turnos_por_sitio)
+        },
+        {
+          id: nameMatchedTurnoId,
+          hora_entrada: '14:00:00',
+          hora_salida: '22:00:00',
+          descripcion: 'Operativo 14-22',
+          sitios_vinculados: ['planta cadipro'],
+        },
+        {
+          id: v1OnlyTurnoId,
+          hora_entrada: '22:00:00',
+          hora_salida: '06:00:00',
+          descripcion: 'Nocturno Histórico',
+          sitios_vinculados: ['Sede Histórica v1'],
+        },
+      ],
+    };
+
+    const rawVersions: RawCertificadoVersionRow[] = [
+      {
+        id: v1Id,
+        id_certificado: cert9001Style.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000001',
+        version_numero: 1,
+        es_version_actual: false,
+      },
+      {
+        id: v2Id,
+        id_certificado: cert9001Style.id,
+        id_organizacion_version: '31000000-0000-0000-0000-000000000101',
+        version_numero: 2,
+        es_version_actual: true,
+      },
+    ];
+
+    const assembled = assembleCertificateVersionsAndChildCollections({
+      cert: cert9001Style,
+      rawVersions,
+      requirementsCatalog: getBundledNormaCatalog().requirementsCatalog,
+    });
+
+    assert.equal(assembled.turnos.some((t) => t.id === ownedTurnoId), true);
+    assert.equal(assembled.turnos.some((t) => t.id === nameMatchedTurnoId), true);
+    assert.equal(assembled.turnos.some((t) => t.id === v1OnlyTurnoId), false);
+    assert.equal(assembled.versiones?.[0].turnos.length, 2);
+    assert.equal(assembled.versiones?.[1].turnos.some((t) => t.id === v1OnlyTurnoId), true);
+  });
 });
+
 
 

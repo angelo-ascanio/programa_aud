@@ -21,6 +21,7 @@ import {
   formatTurnoTime,
   isGenericTurnoDescription,
   isOvernightShift,
+  propagateSharedTurnoDescriptions,
   resolveCustomTurnoDescription,
   resolveHomonymousTargetMatches,
   resolveTurnoDetailById,
@@ -851,6 +852,143 @@ test('Turno catalog reuse, shared-site turno_certificado_compartido linking, edi
   assert.equal(detailFrom45001.parentSitio?.id_certificado, sharedCertId);
   assert.equal(detailFrom45001.parentSitio?.numero_certificado, '45001-41-03-10-2020');
 });
+
+test('propagateSharedTurnoDescriptions copies custom catalog-schedule names to all targets and resolveCustomTurnoDescription prioritizes originCertId over INITIAL_TURNO_CATALOG', () => {
+  const sourceCertId = '7b958a33-e557-44b6-b31e-17d74b506aba';
+  const target45001Id = 'fe3d32fa-1b85-429f-8c40-f49dc41b1b5b';
+  const target9001Id = '14c1c36d-636e-437e-97ba-08ad845908f1';
+  const catalog08to17Id = '70000000-0000-0000-0000-000000000004';
+  const catalog06to14Id = '70000000-0000-0000-0000-000000000005';
+  const custom14to22Id = '70000000-0000-0000-0000-000000000814';
+
+  // 1. Direct originCertId lookup beats INITIAL_TURNO_CATALOG even when target cert has no entry yet
+  const fromOrigin = resolveCustomTurnoDescription({
+    turnoId: catalog08to17Id,
+    certId: target45001Id,
+    originCertId: sourceCertId,
+    hora_entrada: '08:00:00',
+    hora_salida: '17:00:00',
+    currentDescripcion: 'Turno Administrativo y Comercial',
+    customMap: {
+      [`${sourceCertId}::${catalog08to17Id}`]: 'Administrativo 08-17',
+    },
+  });
+  assert.equal(fromOrigin, 'Administrativo 08-17');
+
+  // 2. Propagate custom names from 14001 to both 45001 and 9001 via localStorage mock
+  const store = new Map<string, string>();
+  const prevStorage = (globalThis as { localStorage?: Storage }).localStorage;
+  (globalThis as { localStorage?: Storage }).localStorage = {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  };
+
+  try {
+    saveCustomTurnoDescription({
+      turnoId: catalog08to17Id,
+      certId: sourceCertId,
+      descripcion: 'Administrativo 08-17',
+      saveGlobalFallback: false,
+    });
+    saveCustomTurnoDescription({
+      turnoId: catalog06to14Id,
+      certId: sourceCertId,
+      descripcion: 'Operativo 06-14',
+      saveGlobalFallback: false,
+    });
+    saveCustomTurnoDescription({
+      turnoId: custom14to22Id,
+      certId: sourceCertId,
+      descripcion: 'Operativo 14-22',
+      saveGlobalFallback: true,
+    });
+
+    const sourceCert: typeof INITIAL_CERTIFICADOS_DETAILED[number] = {
+      ...INITIAL_CERTIFICADOS_DETAILED[0],
+      id: sourceCertId,
+      turnos: [
+        {
+          id: catalog08to17Id,
+          hora_entrada: '08:00:00',
+          hora_salida: '17:00:00',
+          descripcion: 'Administrativo 08-17',
+          sitios_vinculados: ['Planta CADIPRO'],
+        },
+        {
+          id: catalog06to14Id,
+          hora_entrada: '06:00:00',
+          hora_salida: '14:00:00',
+          descripcion: 'Operativo 06-14',
+          sitios_vinculados: ['Planta CADIPRO'],
+        },
+        {
+          id: custom14to22Id,
+          hora_entrada: '14:00:00',
+          hora_salida: '22:00:00',
+          descripcion: 'Operativo 14-22',
+          sitios_vinculados: ['Planta CADIPRO'],
+        },
+      ],
+    };
+
+    const propagated = propagateSharedTurnoDescriptions({
+      sourceCert,
+      turnoIds: [catalog08to17Id, catalog06to14Id, custom14to22Id],
+      targetCertIds: [target45001Id, target9001Id],
+      shiftCatalog: INITIAL_TURNO_CATALOG,
+    });
+
+    for (const targetId of [target45001Id, target9001Id]) {
+      assert.equal(propagated[`${targetId}::${catalog08to17Id}`], 'Administrativo 08-17');
+      assert.equal(propagated[`${targetId}::${catalog06to14Id}`], 'Operativo 06-14');
+      assert.equal(propagated[`${targetId}::${custom14to22Id}`], 'Operativo 14-22');
+
+      assert.equal(
+        resolveCustomTurnoDescription({
+          turnoId: catalog08to17Id,
+          certId: targetId,
+          hora_entrada: '08:00:00',
+          hora_salida: '17:00:00',
+          shiftCatalog: INITIAL_TURNO_CATALOG,
+        }),
+        'Administrativo 08-17'
+      );
+      assert.equal(
+        resolveCustomTurnoDescription({
+          turnoId: catalog06to14Id,
+          certId: targetId,
+          hora_entrada: '06:00:00',
+          hora_salida: '14:00:00',
+          shiftCatalog: INITIAL_TURNO_CATALOG,
+        }),
+        'Operativo 06-14'
+      );
+    }
+  } finally {
+    if (prevStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      (globalThis as { localStorage?: Storage }).localStorage = prevStorage;
+    }
+  }
+});
+
 
 
 
