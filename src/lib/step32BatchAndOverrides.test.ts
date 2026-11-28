@@ -267,9 +267,13 @@ test('Step 3.2: renderProcesoView batch checklist UI obeys Clean List, Zero-UUID
   assert.ok(htmlPending.includes('1 cláusula seleccionada (cubre 1 obligatoria en total)'));
   assert.ok(htmlPending.includes('⛔ Excluida ISO 4.3'));
   assert.ok(htmlPending.includes('✓ Ya vinculada a este proceso'));
-  assert.ok(htmlPending.includes('🔗 Cubierta en: Operación Productiva'));
-  assert.ok(htmlPending.includes('⚠️ Pendiente obligatoria'));
-  assert.ok(htmlPending.includes('(+2 subcláusulas obligatorias)'));
+  assert.ok(htmlPending.includes('title="Cubierta en: Operación Productiva"'));
+  assert.ok(htmlPending.includes('>🔗 Cubierta<'));
+  assert.ok(!htmlPending.includes('>🔗 Cubierta en:'));
+  assert.ok(htmlPending.includes('title="Cláusula obligatoria aún no cubierta por ningún proceso"'));
+  assert.ok(htmlPending.includes('>⚠️ Pendiente<'));
+  assert.ok(!htmlPending.includes('Pendiente obligatoria'));
+  assert.ok(!htmlPending.includes('subcláusulas obligatorias)'));
 
   const batchFormMatch = htmlPending.match(/<form id="assignProcesoRequisitosBatchForm"[\s\S]*?<\/form>/);
   assert.ok(batchFormMatch);

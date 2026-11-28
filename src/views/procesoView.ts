@@ -976,25 +976,21 @@ export function renderProcesoBatchRowsSubsetHtml(params: {
         );
       } else {
         if (row.coveredByOtherProcesoNames.length > 0) {
+          const coveredByTooltip = `Cubierta en: ${row.coveredByOtherProcesoNames.join(', ')}`;
           statusBadges.push(
-            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-800 border-indigo-200">🔗 Cubierta en: ${escapeHtml(row.coveredByOtherProcesoNames.join(', '))}</span>`
+            `<span title="${escapeHtml(coveredByTooltip)}" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-800 border-indigo-200 whitespace-nowrap">🔗 Cubierta</span>`
           );
         }
         if (row.isPendingMandatory) {
           statusBadges.push(
-            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-amber-50 text-amber-800 border-amber-200">⚠️ Pendiente obligatoria</span>`
+            `<span title="Cláusula obligatoria aún no cubierta por ningún proceso" class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-amber-50 text-amber-800 border-amber-200 whitespace-nowrap">⚠️ Pendiente</span>`
           );
         } else if (!row.isMandatory) {
           statusBadges.push(
-            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-600 border-slate-200">ℹ️ Informativa</span>`
+            `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border bg-slate-100 text-slate-600 border-slate-200 whitespace-nowrap">ℹ️ Informativa</span>`
           );
         }
       }
-
-      const subtreeHintHtml =
-        (row.req.es_padre || row.mandatorySubtreeCount > 0) && row.mandatorySubtreeCount > 0
-          ? `<span class="text-[11px] font-semibold text-indigo-700 shrink-0 whitespace-nowrap">(+${row.mandatorySubtreeCount} subcláusula${row.mandatorySubtreeCount === 1 ? '' : 's'} obligatoria${row.mandatorySubtreeCount === 1 ? '' : 's'})</span>`
-          : '';
 
       const toggleControlHtml = isCollapsible
         ? `
@@ -1055,7 +1051,6 @@ export function renderProcesoBatchRowsSubsetHtml(params: {
               <span class="block min-w-0 flex-1 truncate text-xs" title="${escapeHtml(tooltipText)}">
                 ${primaryLeadHtml}${rawTextHtml}
               </span>
-              ${subtreeHintHtml}
             </label>
           </div>
           ${
