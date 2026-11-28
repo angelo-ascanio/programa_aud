@@ -351,6 +351,23 @@ export function renderHeader(opts: HeaderOptions): string {
                   <span>Respaldo DB</span>
                 </span>
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-nav="database-sync"
+                data-nav-reset="true"
+                title="Sincronizar cambios de base de datos hacia 06_datos_prueba.sql y 07_normas_requisitos_csv.sql"
+                class="w-full text-left px-4 py-2 text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer whitespace-nowrap ${
+                  activeRoute === 'database-sync'
+                    ? 'bg-slate-100 font-semibold text-slate-900'
+                    : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                }"
+              >
+                <span class="inline-flex items-center gap-2">
+                  <span aria-hidden="true">🔄</span>
+                  <span>Sincronización SQL</span>
+                </span>
+              </button>
             `
             : ''
         }

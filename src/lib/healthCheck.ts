@@ -75,7 +75,14 @@ export interface HealthSummary {
 export type ProfileFilter = 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL';
 
 export type DomainRoute = 'auditorias' | 'certificacion' | 'extra';
-export type ActiveRoute = 'dashboard' | 'profile' | 'approvals' | 'database' | 'database-backup' | DomainRoute;
+export type ActiveRoute =
+  | 'dashboard'
+  | 'profile'
+  | 'approvals'
+  | 'database'
+  | 'database-backup'
+  | 'database-sync'
+  | DomainRoute;
 
 export interface RoleVisualMeta {
   role: UserRole;
@@ -504,7 +511,7 @@ export function canAccessRoute(
   if (route === 'approvals') {
     return profile.status === 'APPROVED' && (profile.role === 'ADMIN' || profile.role === 'WORKER');
   }
-  if (route === 'database' || route === 'database-backup') {
+  if (route === 'database' || route === 'database-backup' || route === 'database-sync') {
     return evaluateAdminAccess(profile).allowed;
   }
   return getVisibleDomainMenus(profile).some((menu) => menu.id === route);

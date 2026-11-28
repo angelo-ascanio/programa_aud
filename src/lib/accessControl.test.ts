@@ -552,9 +552,20 @@ test('ADMIN-only Database Backup & CSV Center route, subview guard, and header m
     subview: null,
   });
 
+  assert.deepEqual(parseHashRouteString('#database-sync'), {
+    route: 'database-sync',
+    subview: null,
+  });
+  assert.deepEqual(parseHashRouteString('#/database-sync'), {
+    route: 'database-sync',
+    subview: null,
+  });
+
   // Strictly ADMIN (APPROVED)
   assert.equal(canAccessRoute(ADMIN_PROFILE, 'database-backup'), true);
   assert.equal(canAccessSubview(ADMIN_PROFILE, 'database-backup'), true);
+  assert.equal(canAccessRoute(ADMIN_PROFILE, 'database-sync'), true);
+  assert.equal(canAccessSubview(ADMIN_PROFILE, 'database-sync'), true);
 
   // Blocked for WORKER, AUDITOR, CLIENT, PENDING, REJECTED
   for (const blockedProfile of [
@@ -566,6 +577,8 @@ test('ADMIN-only Database Backup & CSV Center route, subview guard, and header m
   ]) {
     assert.equal(canAccessRoute(blockedProfile, 'database-backup'), false);
     assert.equal(canAccessSubview(blockedProfile, 'database-backup'), false);
+    assert.equal(canAccessRoute(blockedProfile, 'database-sync'), false);
+    assert.equal(canAccessSubview(blockedProfile, 'database-sync'), false);
   }
 
   const adminHeader = renderHeader({
@@ -580,6 +593,8 @@ test('ADMIN-only Database Backup & CSV Center route, subview guard, and header m
   });
   assert.ok(adminHeader.includes('data-nav="database-backup"'));
   assert.ok(adminHeader.includes('Respaldo DB'));
+  assert.ok(adminHeader.includes('data-nav="database-sync"'));
+  assert.ok(adminHeader.includes('Sincronización SQL'));
 
   for (const [prof, label] of [
     [WORKER_PROFILE, 'worker@fondonorma.test'],
@@ -598,6 +613,8 @@ test('ADMIN-only Database Backup & CSV Center route, subview guard, and header m
     });
     assert.equal(nonAdminHeader.includes('data-nav="database-backup"'), false);
     assert.equal(nonAdminHeader.includes('Respaldo DB'), false);
+    assert.equal(nonAdminHeader.includes('data-nav="database-sync"'), false);
+    assert.equal(nonAdminHeader.includes('Sincronización SQL'), false);
   }
 });
 

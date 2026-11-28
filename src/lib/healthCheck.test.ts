@@ -271,6 +271,7 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
   );
   assert.equal(canAccessRoute(approvedAdmin, 'approvals'), true);
   assert.equal(canAccessRoute(approvedAdmin, 'database'), true);
+  assert.equal(canAccessRoute(approvedAdmin, 'database-sync'), true);
   assert.equal(canAccessRoute(approvedAdmin, 'certificacion'), true);
   assert.equal(canAccessRoute(approvedAdmin, 'profile'), true);
 
@@ -282,10 +283,14 @@ test('getVisibleDomainMenus and canAccessRoute enforce role, approval, 3-block m
   };
   assert.equal(canAccessRoute(approvedWorker, 'approvals'), true);
   assert.equal(canAccessRoute(approvedWorker, 'database'), false);
+  assert.equal(canAccessRoute(approvedWorker, 'database-sync'), false);
   assert.equal(canAccessRoute(approvedWorker, 'certificacion'), true);
   assert.equal(canAccessRoute(approvedWorker, 'profile'), true);
   assert.equal(canAccessRoute(approvedClient, 'approvals'), false);
   assert.equal(canAccessRoute(approvedClient, 'database'), false);
+  assert.equal(canAccessRoute(approvedClient, 'database-sync'), false);
+  assert.equal(canAccessRoute(approvedAuditor, 'database-sync'), false);
+  assert.equal(canAccessRoute(pendingAdmin, 'database-sync'), false);
   assert.equal(canAccessRoute(approvedClient, 'profile'), true);
 });
 
