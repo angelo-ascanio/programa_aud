@@ -54,6 +54,18 @@ import {
   previewTableCsvImport,
   restoreFullDatabaseBackup,
 } from './lib/databaseBackupClient';
+import { renderDatabaseSeedSyncView } from './views/databaseSeedSyncView';
+import {
+  applySqlSeedSync,
+  createInitialDatabaseSeedSyncState,
+  fetchSeedSyncCatalog,
+  previewSqlSeedSync,
+  type DatabaseSeedSyncState,
+} from './lib/sqlSeedSyncClient';
+import {
+  SQL_SEED_SYNC_BLOCKS,
+  type SqlSeedBlockId,
+} from './lib/sqlSeedSyncCatalog';
 import {
   renderAuditoriasView,
   type AuditRecord,
@@ -1006,6 +1018,7 @@ interface AppState {
     lastCheckedAt: string | null;
   };
   databaseBackup: DatabaseBackupState;
+  databaseSeedSync: DatabaseSeedSyncState;
   exploration: {
     records: CertificateRecord[];
     loading: boolean;
@@ -1518,6 +1531,7 @@ const state: AppState = {
     lastCheckedAt: null,
   },
   databaseBackup: createInitialDatabaseBackupState(),
+  databaseSeedSync: createInitialDatabaseSeedSyncState(),
   exploration: {
     records: INITIAL_ENRICHED_SEED_CERTS.searchRecords.map((r) => ({ ...r })),
     loading: false,
@@ -2433,6 +2447,8 @@ function render(): void {
     );
   } else if (effectiveRoute === 'database-backup' && admin) {
     bodyHtml = renderDatabaseBackupView(state.databaseBackup);
+  } else if (effectiveRoute === 'database-sync' && admin) {
+    bodyHtml = renderDatabaseSeedSyncView(state.databaseSeedSync);
   } else if (effectiveRoute === 'profile') {
     bodyHtml = renderProfileView({
       profile: state.profile,
@@ -6300,6 +6316,8 @@ function bindAuthenticatedEvents(): void {
         void runHealthChecks();
       } else if (target === 'database-backup' && isApprovedAdmin()) {
         void loadDatabaseBackupTables();
+      } else if (target === 'database-sync' && isApprovedAdmin()) {
+        void loadDatabaseSeedSyncCatalog(true);
       }
     });
   });
@@ -7161,6 +7179,7 @@ function bindAuthenticatedEvents(): void {
   });
 
   attachDatabaseBackupEventListeners();
+  attachDatabaseSeedSyncEventListeners();
 
   // Top-Right Changelog Trigger [🕒 Historial de Cambios]
   document.querySelectorAll<HTMLElement>('[data-action="open-changelog"]').forEach((btn) => {
@@ -10680,7 +10699,7 @@ function bindAuthenticatedEvents(): void {
         try {
           const { error } = await supabase
             .from('estatus')
-            .update({ estatus: normalizedEstatus })
+            .update({ estatus: normalizedEstatus, updated_at: new Date().toISOString() })
             .eq('id', currentId)
             .is('deleted_at', null);
           if (error && !isMissingTableOrSchemaError(error)) {
@@ -10905,7 +10924,7 @@ function bindAuthenticatedEvents(): void {
         try {
           const { error } = await supabase
             .from('tipo_auditoria')
-            .update({ tipo: normalizedTipo })
+            .update({ tipo: normalizedTipo, updated_at: new Date().toISOString() })
             .eq('id', currentId)
             .is('deleted_at', null);
           if (error && !isMissingTableOrSchemaError(error)) {
@@ -11140,7 +11159,7 @@ function bindAuthenticatedEvents(): void {
         try {
           const { error } = await supabase
             .from('metodologia_auditoria')
-            .update({ metodologia: normalizedMetodologia })
+            .update({ metodologia: normalizedMetodologia, updated_at: new Date().toISOString() })
             .eq('id', currentId)
             .is('deleted_at', null);
           if (error && !isMissingTableOrSchemaError(error)) {
@@ -12551,6 +12570,7 @@ function bindAuthenticatedEvents(): void {
               tipo_vinculacion: updatedBox.tipo_vinculacion,
               es_vinculada: updatedBox.es_vinculada,
               tiene_sitio_temporal: updatedBox.tiene_sitio_temporal,
+              updated_at: new Date().toISOString(),
             })
             .eq('id', updatedBox.id);
           if (error) {
@@ -12696,6 +12716,7 @@ function bindAuthenticatedEvents(): void {
               .update({
                 nivel_vinculacion: nextNivel,
                 es_vinculada: nextEsVinculada,
+                updated_at: new Date().toISOString(),
               })
               .eq('id', targetBox.id);
             if (boxErr) {
@@ -12914,6 +12935,7 @@ function bindAuthenticatedEvents(): void {
             .from('vinculo_certificado')
             .update({
               tipo_vinculacion_override: validation.normalizedOverride,
+              updated_at: new Date().toISOString(),
             })
             .eq('id', linkItem.id);
           if (error) {
@@ -36297,6 +36319,8 @@ function resetClientSessionState(): void {
     running: false,
     lastCheckedAt: null,
   };
+  state.databaseBackup = createInitialDatabaseBackupState();
+  state.databaseSeedSync = createInitialDatabaseSeedSyncState();
   state.exploration = {
     records: INITIAL_ENRICHED_SEED_CERTS.searchRecords.map((r) => ({ ...r })),
     loading: false,
@@ -37042,6 +37066,10 @@ async function loadUserSession(user: User | null): Promise<void> {
 
     if (state.activeRoute === 'database-backup' && isApprovedAdmin()) {
       void loadDatabaseBackupTables();
+    } else if (state.activeRoute === 'database-sync' && isApprovedAdmin()) {
+      if (!state.databaseSeedSync.catalog && !state.databaseSeedSync.loadingCatalog) {
+        void loadDatabaseSeedSyncCatalog();
+      }
     }
 
     if (state.profile?.status === 'APPROVED') {
@@ -50227,6 +50255,263 @@ function attachDatabaseBackupEventListeners(): void {
   });
 }
 
+async function loadDatabaseSeedSyncCatalog(force = false): Promise<void> {
+  if (!isApprovedAdmin()) return;
+  if (state.databaseSeedSync.loadingCatalog) return;
+  if (state.databaseSeedSync.catalog && !force) return;
+
+  state.databaseSeedSync = {
+    ...state.databaseSeedSync,
+    loadingCatalog: true,
+    error: null,
+  };
+  render();
+
+  try {
+    const catalog = await fetchSeedSyncCatalog();
+    state.databaseSeedSync = {
+      ...state.databaseSeedSync,
+      loadingCatalog: false,
+      catalog,
+    };
+  } catch (err) {
+    state.databaseSeedSync = {
+      ...state.databaseSeedSync,
+      loadingCatalog: false,
+      error:
+        err instanceof Error
+          ? sanitizeZeroUuidMessage(err.message)
+          : 'No se pudo cargar el catálogo de sincronización SQL.',
+    };
+  }
+  render();
+}
+
+function renderDatabaseSeedSyncPreservingFocus(focusSelector?: string): void {
+  const prevScrollX = window.scrollX;
+  const prevScrollY = window.scrollY;
+  render();
+  window.scrollTo(prevScrollX, prevScrollY);
+  if (focusSelector) {
+    const el = document.querySelector<HTMLElement>(focusSelector);
+    el?.focus({ preventScroll: true });
+  }
+}
+
+function getOrderedSeedSyncSectionIds(selectedSet: ReadonlySet<string>): string[] {
+  const blocks = state.databaseSeedSync.catalog?.blocks ?? SQL_SEED_SYNC_BLOCKS;
+  return blocks
+    .flatMap((blk) => blk.sections)
+    .map((sec) => sec.id)
+    .filter((id) => selectedSet.has(id));
+}
+
+function attachDatabaseSeedSyncEventListeners(): void {
+  if (state.activeRoute !== 'database-sync' || !isApprovedAdmin()) return;
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-sync-block"]')
+    .forEach((checkbox) => {
+      checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
+    });
+
+  const applySelectionUpdate = (
+    nextSelectedIds: string[],
+    focusSelector?: string
+  ): void => {
+    state.databaseSeedSync = {
+      ...state.databaseSeedSync,
+      selectedSectionIds: nextSelectedIds,
+      previewResult: null,
+      applyResult: null,
+      error: null,
+    };
+    renderDatabaseSeedSyncPreservingFocus(focusSelector);
+  };
+
+  document
+    .querySelector<HTMLButtonElement>('[data-action="toggle-sync-all"]')
+    ?.addEventListener('click', () => {
+      if (state.databaseSeedSync.analyzing || state.databaseSeedSync.applying) return;
+      const blocks = state.databaseSeedSync.catalog?.blocks ?? SQL_SEED_SYNC_BLOCKS;
+      const allIds = blocks.flatMap((blk) => blk.sections.map((sec) => sec.id));
+      applySelectionUpdate(allIds, '[data-action="toggle-sync-all"]');
+    });
+
+  document
+    .querySelector<HTMLButtonElement>('[data-action="clear-sync-selection"]')
+    ?.addEventListener('click', () => {
+      if (state.databaseSeedSync.analyzing || state.databaseSeedSync.applying) return;
+      applySelectionUpdate([], '[data-action="clear-sync-selection"]');
+    });
+
+  document
+    .querySelector<HTMLInputElement>('input[data-action="toggle-sync-fk-support"]')
+    ?.addEventListener('change', (e) => {
+      if (state.databaseSeedSync.analyzing || state.databaseSeedSync.applying) return;
+      const checked = Boolean((e.currentTarget as HTMLInputElement).checked);
+      state.databaseSeedSync = {
+        ...state.databaseSeedSync,
+        includeFkSupport: checked,
+        previewResult: null,
+        applyResult: null,
+        error: null,
+      };
+      renderDatabaseSeedSyncPreservingFocus('input[data-action="toggle-sync-fk-support"]');
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-sync-block"]')
+    .forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        if (state.databaseSeedSync.analyzing || state.databaseSeedSync.applying) return;
+        const blockId = checkbox.dataset.blockId as SqlSeedBlockId | undefined;
+        if (!blockId) return;
+        const blocks = state.databaseSeedSync.catalog?.blocks ?? SQL_SEED_SYNC_BLOCKS;
+        const block = blocks.find((b) => b.id === blockId);
+        if (!block) return;
+
+        const nextSet = new Set(state.databaseSeedSync.selectedSectionIds);
+        const blockSectionIds = block.sections.map((sec) => sec.id);
+        const allWereSelected = blockSectionIds.every((id) => nextSet.has(id));
+        if (allWereSelected) {
+          for (const id of blockSectionIds) nextSet.delete(id);
+        } else {
+          for (const id of blockSectionIds) nextSet.add(id);
+        }
+
+        applySelectionUpdate(
+          getOrderedSeedSyncSectionIds(nextSet),
+          `input[data-action="toggle-sync-block"][data-block-id="${blockId}"]`
+        );
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLInputElement>('input[data-action="toggle-sync-section"]')
+    .forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        if (state.databaseSeedSync.analyzing || state.databaseSeedSync.applying) return;
+        const sectionId = checkbox.dataset.sectionId || '';
+        if (!sectionId) return;
+        const blocks = state.databaseSeedSync.catalog?.blocks ?? SQL_SEED_SYNC_BLOCKS;
+        const nextSet = new Set(state.databaseSeedSync.selectedSectionIds);
+
+        if (checkbox.checked) {
+          if (sectionId === 'auditorias.resumen') {
+            const audBlock = blocks.find((b) => b.id === 'auditorias');
+            for (const sec of audBlock?.sections ?? []) {
+              nextSet.add(sec.id);
+            }
+          } else {
+            nextSet.add(sectionId);
+          }
+        } else {
+          nextSet.delete(sectionId);
+          if (sectionId.startsWith('auditorias.') && sectionId !== 'auditorias.resumen') {
+            nextSet.delete('auditorias.resumen');
+          }
+        }
+
+        applySelectionUpdate(
+          getOrderedSeedSyncSectionIds(nextSet),
+          `input[data-action="toggle-sync-section"][data-section-id="${sectionId}"]`
+        );
+      });
+    });
+
+  document
+    .querySelector<HTMLButtonElement>('[data-action="preview-sql-seed-sync"]')
+    ?.addEventListener('click', async () => {
+      if (
+        state.databaseSeedSync.analyzing ||
+        state.databaseSeedSync.applying ||
+        state.databaseSeedSync.selectedSectionIds.length === 0
+      ) {
+        return;
+      }
+
+      state.databaseSeedSync = {
+        ...state.databaseSeedSync,
+        analyzing: true,
+        error: null,
+        applyResult: null,
+      };
+      renderDatabaseSeedSyncPreservingFocus();
+
+      try {
+        const previewResult = await previewSqlSeedSync(
+          state.databaseSeedSync.selectedSectionIds,
+          state.databaseSeedSync.includeFkSupport
+        );
+        state.databaseSeedSync = {
+          ...state.databaseSeedSync,
+          analyzing: false,
+          previewResult,
+        };
+      } catch (err) {
+        state.databaseSeedSync = {
+          ...state.databaseSeedSync,
+          analyzing: false,
+          error:
+            err instanceof Error
+              ? sanitizeZeroUuidMessage(err.message)
+              : 'No se pudo analizar la vista previa de sincronización SQL.',
+        };
+      }
+      renderDatabaseSeedSyncPreservingFocus('[data-action="preview-sql-seed-sync"]');
+    });
+
+  document
+    .querySelector<HTMLButtonElement>('[data-action="apply-sql-seed-sync"]')
+    ?.addEventListener('click', async () => {
+      if (
+        !state.databaseSeedSync.previewResult ||
+        !state.databaseSeedSync.previewResult.canApply ||
+        state.databaseSeedSync.analyzing ||
+        state.databaseSeedSync.applying
+      ) {
+        return;
+      }
+
+      state.databaseSeedSync = {
+        ...state.databaseSeedSync,
+        applying: true,
+        error: null,
+      };
+      renderDatabaseSeedSyncPreservingFocus();
+
+      try {
+        const applyResult = await applySqlSeedSync(
+          state.databaseSeedSync.selectedSectionIds,
+          state.databaseSeedSync.includeFkSupport
+        );
+        state.databaseSeedSync = {
+          ...state.databaseSeedSync,
+          applying: false,
+          applyResult,
+          previewResult: null,
+        };
+        showFloatingToast(
+          'Sincronización SQL aplicada correctamente a los archivos semilla.',
+          'success'
+        );
+        renderDatabaseSeedSyncPreservingFocus();
+        void loadDatabaseSeedSyncCatalog(true);
+      } catch (err) {
+        state.databaseSeedSync = {
+          ...state.databaseSeedSync,
+          applying: false,
+          error:
+            err instanceof Error
+              ? sanitizeZeroUuidMessage(err.message)
+              : 'No se pudo aplicar la sincronización hacia los archivos SQL.',
+        };
+        renderDatabaseSeedSyncPreservingFocus('[data-action="apply-sql-seed-sync"]');
+      }
+    });
+}
+
 // Close click-toggled dropdown when clicking outside header dropdown containers
 document.addEventListener('click', (e) => {
   if (!state.openMenu) return;
@@ -50424,6 +50709,8 @@ window.addEventListener('hashchange', () => {
         void runHealthChecks();
       } else if (route === 'database-backup' && isApprovedAdmin()) {
         void loadDatabaseBackupTables();
+      } else if (route === 'database-sync' && isApprovedAdmin()) {
+        void loadDatabaseSeedSyncCatalog(true);
       }
     }
   } else if (state.profile) {
@@ -50460,6 +50747,8 @@ window.addEventListener('popstate', () => {
       render();
       if (route === 'database-backup' && isApprovedAdmin()) {
         void loadDatabaseBackupTables();
+      } else if (route === 'database-sync' && isApprovedAdmin()) {
+        void loadDatabaseSeedSyncCatalog(true);
       }
     }
   } else if (state.profile) {
