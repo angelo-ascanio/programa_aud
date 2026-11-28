@@ -21,6 +21,32 @@ import {
   type DbBackupSchemaConstraint,
 } from './src/lib/dbBackupCsv';
 import { buildZipArchive } from './src/lib/zipArchive';
+import {
+  SQL_SEED_SYNC_BLOCKS,
+  SQL_SYNC_TABLE_METADATA,
+  SQL_SYNC_TABLES_TOPO_ORDER,
+  resolveSyncSelectionPlan,
+  type SqlSeedTargetFile,
+} from './src/lib/sqlSeedSyncCatalog';
+import { hasBalancedDollarDelimiters, type SqlRowRecord } from './src/lib/sqlSeedGenerator';
+import {
+  applyDatabaseSyncTo06Sql,
+  previewDatabaseSyncTo06Sql,
+} from './src/lib/sqlSeedFileUpdater';
+import { applyNormas07Sync, previewNormas07Sync } from './src/lib/sqlNormasSeedSync';
+import {
+  extractSeededUserIdsFrom05Sql,
+  filterClientOrganizationAccessWith05Users,
+  validateSeedSyncRequestPayload,
+  type SeedSyncApplyResponse,
+  type SeedSyncCatalogResponse,
+  type SeedSyncPreviewResponse,
+  type SeedSyncTableDiffSummary,
+  type SeedSyncTableLiveCount,
+  type SeedSyncTargetFileStatus,
+  type SeedSyncTargetResult,
+  type SeedSyncUpdatedFileInfo,
+} from './src/lib/sqlSeedSyncClient';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -198,6 +224,403 @@ async function withDbTransaction<T>(fn: (client: PgClient) => Promise<T>): Promi
       throw err;
     }
   });
+}
+
+async function withReadOnlyDbTransaction<T>(fn: (client: PgClient) => Promise<T>): Promise<T> {
+  return withDbClient(async (client) => {
+    await client.query('BEGIN READ ONLY');
+    try {
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    }
+  });
+}
+
+const SEED_SYNC_ALLOWED_FILE_NAMES = new Set<string>([
+  '05_usuarios.sql',
+  '06_datos_prueba.sql',
+  '07_normas_requisitos_csv.sql',
+]);
+
+function resolveSafeQueriesFilePath(
+  fileName: '05_usuarios.sql' | '06_datos_prueba.sql' | '07_normas_requisitos_csv.sql'
+): string {
+  if (!SEED_SYNC_ALLOWED_FILE_NAMES.has(fileName)) {
+    throw new Error('Archivo SQL de sincronización no autorizado.');
+  }
+  const resolved = path.resolve(QUERIES_DIR, fileName);
+  const queriesPrefix = QUERIES_DIR.endsWith(path.sep) ? QUERIES_DIR : `${QUERIES_DIR}${path.sep}`;
+  if (!resolved.startsWith(queriesPrefix)) {
+    throw new Error('Ruta de archivo SQL fuera del directorio permitido.');
+  }
+  return resolved;
+}
+
+function sanitizeSeedSyncServerError(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : fallback;
+  const lowered = raw.toLowerCase();
+  if (
+    lowered.includes('postgres://') ||
+    lowered.includes('password') ||
+    lowered.includes('vite_supabase_database_key') ||
+    lowered.includes('vite_supabase_token')
+  ) {
+    return fallback;
+  }
+  return sanitizeZeroUuidMessage(raw) || fallback;
+}
+
+async function readSeedSyncFileStatus(
+  fileName: SqlSeedTargetFile
+): Promise<SeedSyncTargetFileStatus> {
+  const filePath = resolveSafeQueriesFilePath(fileName);
+  const relativePath = `public/supabase/queries/${fileName}`;
+  try {
+    const [stat, content] = await Promise.all([
+      fs.stat(filePath),
+      fs.readFile(filePath, 'utf8'),
+    ]);
+    const lineCount = content.length === 0 ? 0 : content.split(/\r\n|\r|\n/).length;
+    return {
+      fileName,
+      relativePath,
+      exists: true,
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+      lineCount,
+    };
+  } catch {
+    return {
+      fileName,
+      relativePath,
+      exists: false,
+      sizeBytes: 0,
+      updatedAt: null,
+      lineCount: 0,
+    };
+  }
+}
+
+async function readSeedSqlFileIfExists(
+  fileName: '05_usuarios.sql' | '06_datos_prueba.sql' | '07_normas_requisitos_csv.sql'
+): Promise<string> {
+  const filePath = resolveSafeQueriesFilePath(fileName);
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+async function writeFileAtomically(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    await fs.writeFile(tmpPath, content, { encoding: 'utf8', mode: 0o644 });
+    await fs.rename(tmpPath, filePath);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function fetchSyncTableColumnsMap(
+  client: PgClient
+): Promise<Map<string, Set<string>>> {
+  const colsRes = await client.query<{ table_name: string; column_name: string }>(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+     ORDER BY table_name, ordinal_position`
+  );
+  const map = new Map<string, Set<string>>();
+  for (const row of colsRes.rows) {
+    if (!SQL_SYNC_TABLE_METADATA[row.table_name]) continue;
+    let set = map.get(row.table_name);
+    if (!set) {
+      set = new Set<string>();
+      map.set(row.table_name, set);
+    }
+    set.add(row.column_name);
+  }
+  return map;
+}
+
+const NORMAS_CROSS_FILE_06_TABLES: readonly string[] = [
+  'acreditacion_norma',
+  'certificado',
+  'norma_auditor',
+  'requisitos_por_proceso',
+  'requisitos_no_aplicables_certificado',
+  'hallazgo',
+];
+
+interface SeedSyncComputationBundle {
+  plan: ReturnType<typeof resolveSyncSelectionPlan>;
+  targetResults: SeedSyncTargetResult[];
+  summaryByTable: SeedSyncTableDiffSummary[];
+  warnings: string[];
+  previewSnippets: string[];
+  hasChanges: boolean;
+  canApply: boolean;
+  nextContentByFile: Map<SqlSeedTargetFile, string>;
+  previousContentByFile: Map<SqlSeedTargetFile, string>;
+  changedByFile: Map<SqlSeedTargetFile, boolean>;
+  tablesChangedByFile: Map<SqlSeedTargetFile, number>;
+  validationErrors: string[];
+}
+
+async function computeSeedSyncBundle(
+  selectedSectionIds: readonly string[],
+  includeFkSupport: boolean,
+  mode: 'preview' | 'apply'
+): Promise<SeedSyncComputationBundle> {
+  const plan = resolveSyncSelectionPlan(selectedSectionIds, {
+    includeParentFkDependencies: includeFkSupport,
+  });
+
+  const neededTablesSet = new Set<string>([...plan.tablesFor06, ...plan.tablesFor07]);
+  if (plan.hasSpecialNormasCase) {
+    for (const refTbl of NORMAS_CROSS_FILE_06_TABLES) {
+      neededTablesSet.add(refTbl);
+    }
+  }
+  const orderedTablesToFetch = SQL_SYNC_TABLES_TOPO_ORDER.filter((tbl) =>
+    neededTablesSet.has(tbl)
+  );
+
+  const liveRowsByTable: Record<string, SqlRowRecord[]> = {};
+  const missingDbTables: string[] = [];
+
+  await withReadOnlyDbTransaction(async (client) => {
+    const dbColumnsByTable = await fetchSyncTableColumnsMap(client);
+    for (const tableName of orderedTablesToFetch) {
+      const meta = SQL_SYNC_TABLE_METADATA[tableName];
+      if (!meta) continue;
+      const cols = dbColumnsByTable.get(tableName);
+      if (!cols || cols.size === 0) {
+        liveRowsByTable[tableName] = [];
+        missingDbTables.push(tableName);
+        continue;
+      }
+
+      const result = await client.query<SqlRowRecord>(
+        `SELECT * FROM public.${quoteIdent(tableName)}`
+      );
+      liveRowsByTable[tableName] = sortSelfReferentialRowsForRestore(
+        tableName,
+        result.rows
+      ) as SqlRowRecord[];
+    }
+  });
+
+  const warnings: string[] = [];
+  if (missingDbTables.length > 0) {
+    warnings.push(
+      `Las siguientes tablas aún no existen en PostgreSQL y fueron omitidas en la comparación: ${missingDbTables.join(', ')}.`
+    );
+  }
+
+  const [sql05Content, sql06Content, sql07Content] = await Promise.all([
+    readSeedSqlFileIfExists('05_usuarios.sql'),
+    plan.tablesFor06.length > 0 || plan.hasSpecialNormasCase
+      ? readSeedSqlFileIfExists('06_datos_prueba.sql')
+      : Promise.resolve(''),
+    plan.tablesFor07.length > 0
+      ? readSeedSqlFileIfExists('07_normas_requisitos_csv.sql')
+      : Promise.resolve(''),
+  ]);
+
+  if (liveRowsByTable.client_organization_access) {
+    if (!sql05Content.trim()) {
+      warnings.push(
+        'No se pudo leer 05_usuarios.sql para validar integridad FK de client_organization_access.'
+      );
+    } else {
+      const seededUserIds05 = extractSeededUserIdsFrom05Sql(sql05Content);
+      const filteredAccess = filterClientOrganizationAccessWith05Users(
+        liveRowsByTable.client_organization_access,
+        seededUserIds05
+      );
+      liveRowsByTable.client_organization_access = filteredAccess.rows;
+      for (const w of filteredAccess.warnings) {
+        warnings.push(w);
+      }
+    }
+  }
+
+  const fkSupportSet = new Set<string>(plan.fkSupportTables);
+  const targetResults: SeedSyncTargetResult[] = [];
+  const summaryByTable: SeedSyncTableDiffSummary[] = [];
+  const previewSnippets: string[] = [];
+  const nextContentByFile = new Map<SqlSeedTargetFile, string>();
+  const previousContentByFile = new Map<SqlSeedTargetFile, string>();
+  const changedByFile = new Map<SqlSeedTargetFile, boolean>();
+  const tablesChangedByFile = new Map<SqlSeedTargetFile, number>();
+  const validationErrors: string[] = [];
+
+  if (plan.tablesFor06.length > 0) {
+    if (!sql06Content.trim()) {
+      throw new Error('No se encontró public/supabase/queries/06_datos_prueba.sql para sincronizar.');
+    }
+
+    const sync06 =
+      mode === 'apply'
+        ? applyDatabaseSyncTo06Sql(sql06Content, liveRowsByTable, {
+            tablesToSync: plan.tablesFor06,
+          })
+        : previewDatabaseSyncTo06Sql(sql06Content, liveRowsByTable, {
+            tablesToSync: plan.tablesFor06,
+          });
+
+    const taggedSummaries: SeedSyncTableDiffSummary[] = sync06.orderedSummaries.map((item) => ({
+      ...item,
+      targetFile: '06_datos_prueba.sql',
+      isFkSupport: fkSupportSet.has(item.table),
+    }));
+
+    const toInsert = taggedSummaries.reduce((acc, s) => acc + s.toInsert, 0);
+    const toUpdate = taggedSummaries.reduce((acc, s) => acc + s.toUpdate, 0);
+    const toArchiveOrDelete = taggedSummaries.reduce(
+      (acc, s) => acc + s.toArchiveOrDelete,
+      0
+    );
+
+    const balancedDollars =
+      sync06.validation.balancedDollarDelimiters &&
+      hasBalancedDollarDelimiters(sync06.nextSqlContent);
+    const is06Valid =
+      sync06.validation.valid && balancedDollars && sync06.validation.zeroProtectedDeletes;
+    const targetErrors = sync06.validation.errors.map((e) => sanitizeZeroUuidMessage(e));
+    if (!balancedDollars && targetErrors.length === 0) {
+      targetErrors.push('El SQL generado para 06_datos_prueba.sql tiene delimitadores $$ desbalanceados.');
+    }
+
+    targetResults.push({
+      targetFile: '06_datos_prueba.sql',
+      changed: sync06.changed,
+      valid: is06Valid,
+      validationErrors: targetErrors,
+      warnings: sync06.warnings.map((w) => sanitizeZeroUuidMessage(w)),
+      summaryByTable: taggedSummaries,
+      diffSnippets: sync06.diffSnippets,
+      counts: {
+        tablesWithChanges: sync06.counts.tablesWithChanges,
+        toInsert,
+        toUpdate,
+        toArchiveOrDelete,
+        phaseACellUpdates: sync06.counts.phaseACellUpdates,
+        phaseBUpdatesById: sync06.counts.phaseBUpdatesById,
+        phaseBInserts: sync06.counts.phaseBInserts,
+        phaseBArchivedUpserts: sync06.counts.phaseBArchivedUpserts,
+        phaseBDeletedMnLinks: sync06.counts.phaseBDeletedMnLinks,
+      },
+    });
+
+    summaryByTable.push(...taggedSummaries);
+    for (const w of sync06.warnings) warnings.push(sanitizeZeroUuidMessage(w));
+    for (const snip of sync06.diffSnippets) {
+      if (previewSnippets.length < 60) previewSnippets.push(snip);
+    }
+    for (const errMsg of targetErrors) validationErrors.push(errMsg);
+
+    previousContentByFile.set('06_datos_prueba.sql', sql06Content);
+    nextContentByFile.set('06_datos_prueba.sql', sync06.nextSqlContent);
+    changedByFile.set('06_datos_prueba.sql', sync06.changed);
+    tablesChangedByFile.set('06_datos_prueba.sql', sync06.counts.tablesWithChanges);
+  }
+
+  if (plan.tablesFor07.length > 0) {
+    if (!sql07Content.trim()) {
+      throw new Error(
+        'No se encontró public/supabase/queries/07_normas_requisitos_csv.sql para sincronizar.'
+      );
+    }
+
+    const normasOptions = {
+      existing06SqlContent: sql06Content,
+      live06RowsByTable: liveRowsByTable,
+    };
+    const sync07 =
+      mode === 'apply'
+        ? applyNormas07Sync(sql07Content, liveRowsByTable, normasOptions)
+        : previewNormas07Sync(sql07Content, liveRowsByTable, normasOptions);
+
+    const taggedSummaries: SeedSyncTableDiffSummary[] = sync07.orderedSummaries.map((item) => ({
+      ...item,
+      targetFile: '07_normas_requisitos_csv.sql',
+      isFkSupport: fkSupportSet.has(item.table),
+    }));
+
+    const balancedDollars =
+      sync07.validation.balancedDollarDelimiters &&
+      hasBalancedDollarDelimiters(sync07.nextSqlContent);
+    const is07Valid =
+      sync07.validation.valid && balancedDollars && sync07.validation.zeroProtectedDeletes;
+    const targetErrors = sync07.validation.errors.map((e) => sanitizeZeroUuidMessage(e));
+    if (!balancedDollars && targetErrors.length === 0) {
+      targetErrors.push(
+        'El SQL generado para 07_normas_requisitos_csv.sql tiene delimitadores $$ desbalanceados.'
+      );
+    }
+
+    targetResults.push({
+      targetFile: '07_normas_requisitos_csv.sql',
+      changed: sync07.changed,
+      valid: is07Valid,
+      validationErrors: targetErrors,
+      warnings: sync07.warnings.map((w) => sanitizeZeroUuidMessage(w)),
+      summaryByTable: taggedSummaries,
+      diffSnippets: sync07.diffSnippets,
+      counts: {
+        tablesWithChanges: sync07.counts.tablesWithChanges,
+        toInsert: sync07.counts.toInsert,
+        toUpdate: sync07.counts.toUpdate,
+        toArchiveOrDelete: sync07.counts.toArchive,
+      },
+      historicalUuidPreserved: sync07.historicalUuidCheck.valid,
+      crossFileReferencesDetected:
+        sync07.crossFileCoherence.normaReferences.length +
+        sync07.crossFileCoherence.requisitoReferences.length,
+      buildNormasSeedNoteEs: sync07.buildNormasSeedNoteEs,
+    });
+
+    summaryByTable.push(...taggedSummaries);
+    for (const w of sync07.warnings) warnings.push(sanitizeZeroUuidMessage(w));
+    for (const snip of sync07.diffSnippets) {
+      if (previewSnippets.length < 60) previewSnippets.push(snip);
+    }
+    for (const errMsg of targetErrors) validationErrors.push(errMsg);
+
+    previousContentByFile.set('07_normas_requisitos_csv.sql', sql07Content);
+    nextContentByFile.set('07_normas_requisitos_csv.sql', sync07.nextSqlContent);
+    changedByFile.set('07_normas_requisitos_csv.sql', sync07.changed);
+    tablesChangedByFile.set('07_normas_requisitos_csv.sql', sync07.counts.tablesWithChanges);
+  }
+
+  const dedupedWarnings = Array.from(
+    new Set(warnings.map((w) => sanitizeZeroUuidMessage(w)).filter(Boolean))
+  );
+  const hasChanges = targetResults.some((item) => item.changed);
+  const allValid = targetResults.every((item) => item.valid);
+
+  return {
+    plan,
+    targetResults,
+    summaryByTable,
+    warnings: dedupedWarnings,
+    previewSnippets,
+    hasChanges,
+    canApply: hasChanges && allValid,
+    nextContentByFile,
+    previousContentByFile,
+    changedByFile,
+    tablesChangedByFile,
+    validationErrors: Array.from(new Set(validationErrors)),
+  };
 }
 
 function quoteIdent(identifier: string): string {
@@ -1054,6 +1477,225 @@ async function createServer(): Promise<void> {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error importando registros CSV.';
       res.status(400).json({ ok: false, error: sanitizeZeroUuidMessage(message) });
+    }
+  });
+
+  app.get('/api/admin/db/seed-sync/catalog', async (req: Request, res: Response) => {
+    const admin = await requireApprovedAdmin(req, res);
+    if (!admin) return;
+
+    try {
+      const [file06, file07] = await Promise.all([
+        readSeedSyncFileStatus('06_datos_prueba.sql'),
+        readSeedSyncFileStatus('07_normas_requisitos_csv.sql'),
+      ]);
+
+      const tableCounts: Record<string, SeedSyncTableLiveCount> = {};
+
+      await withReadOnlyDbTransaction(async (client) => {
+        const dbCols = await fetchSyncTableColumnsMap(client);
+        const unionQueries: string[] = [];
+
+        for (const tableName of SQL_SYNC_TABLES_TOPO_ORDER) {
+          const meta = SQL_SYNC_TABLE_METADATA[tableName];
+          if (!meta) continue;
+          const cols = dbCols.get(tableName);
+          if (!cols || cols.size === 0) {
+            tableCounts[tableName] = {
+              tableName,
+              labelEs: meta.labelEs,
+              targetFile: meta.targetFile,
+              existsInDb: false,
+              totalRows: 0,
+              activeRows: 0,
+              archivedRows: 0,
+            };
+            continue;
+          }
+
+          const hasDeletedAt = cols.has('deleted_at');
+          const safeTableLiteral = `'${tableName}'::text`;
+          const quotedTable = quoteIdent(tableName);
+          if (hasDeletedAt) {
+            unionQueries.push(
+              `SELECT ${safeTableLiteral} AS table_name, COUNT(*)::int AS total_rows, COUNT(*) FILTER (WHERE deleted_at IS NULL)::int AS active_rows, COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS archived_rows FROM public.${quotedTable}`
+            );
+          } else {
+            unionQueries.push(
+              `SELECT ${safeTableLiteral} AS table_name, COUNT(*)::int AS total_rows, COUNT(*)::int AS active_rows, 0::int AS archived_rows FROM public.${quotedTable}`
+            );
+          }
+        }
+
+        if (unionQueries.length > 0) {
+          const countRes = await client.query<{
+            table_name: string;
+            total_rows: number;
+            active_rows: number;
+            archived_rows: number;
+          }>(unionQueries.join(' UNION ALL '));
+
+          for (const row of countRes.rows) {
+            const meta = SQL_SYNC_TABLE_METADATA[row.table_name];
+            if (!meta) continue;
+            tableCounts[row.table_name] = {
+              tableName: row.table_name,
+              labelEs: meta.labelEs,
+              targetFile: meta.targetFile,
+              existsInDb: true,
+              totalRows: Number(row.total_rows ?? 0),
+              activeRows: Number(row.active_rows ?? 0),
+              archivedRows: Number(row.archived_rows ?? 0),
+            };
+          }
+        }
+      });
+
+      const responsePayload: SeedSyncCatalogResponse = {
+        ok: true,
+        blocks: SQL_SEED_SYNC_BLOCKS,
+        files: [file06, file07],
+        tableCounts,
+        generatedAt: new Date().toISOString(),
+      };
+      res.status(200).json(responsePayload);
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: sanitizeSeedSyncServerError(
+          err,
+          'No se pudo cargar el catálogo y conteo vivo de sincronización SQL.'
+        ),
+      });
+    }
+  });
+
+  app.post('/api/admin/db/seed-sync/preview', async (req: Request, res: Response) => {
+    const admin = await requireApprovedAdmin(req, res);
+    if (!admin) return;
+
+    const validation = validateSeedSyncRequestPayload(req.body);
+    if (!validation.ok) {
+      res.status(400).json({ ok: false, error: validation.error });
+      return;
+    }
+
+    try {
+      const bundle = await computeSeedSyncBundle(
+        validation.selectedSectionIds,
+        validation.includeFkSupport,
+        'preview'
+      );
+
+      const responsePayload: SeedSyncPreviewResponse = {
+        ok: true,
+        plan: bundle.plan,
+        targetResults: bundle.targetResults,
+        summaryByTable: bundle.summaryByTable,
+        warnings: bundle.warnings,
+        previewSnippets: bundle.previewSnippets,
+        hasChanges: bundle.hasChanges,
+        canApply: bundle.canApply,
+      };
+      res.status(200).json(responsePayload);
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: sanitizeSeedSyncServerError(
+          err,
+          'No se pudo generar la vista previa de sincronización SQL.'
+        ),
+      });
+    }
+  });
+
+  app.post('/api/admin/db/seed-sync/apply', async (req: Request, res: Response) => {
+    const admin = await requireApprovedAdmin(req, res);
+    if (!admin) return;
+
+    const validation = validateSeedSyncRequestPayload(req.body);
+    if (!validation.ok) {
+      res.status(400).json({ ok: false, error: validation.error });
+      return;
+    }
+
+    try {
+      const bundle = await computeSeedSyncBundle(
+        validation.selectedSectionIds,
+        validation.includeFkSupport,
+        'apply'
+      );
+
+      if (bundle.targetResults.some((item) => !item.valid)) {
+        const detail =
+          bundle.validationErrors[0] ||
+          'La validación de seguridad SQL detectó inconsistencias; no se modificaron archivos en disco.';
+        res.status(422).json({
+          ok: false,
+          error: sanitizeZeroUuidMessage(detail),
+          warnings: bundle.warnings,
+        });
+        return;
+      }
+
+      const writtenFilesRollback: Array<{ filePath: string; previousContent: string }> = [];
+      const updatedFiles: SeedSyncUpdatedFileInfo[] = [];
+
+      try {
+        for (const targetFile of bundle.plan.targetFiles) {
+          const filePath = resolveSafeQueriesFilePath(targetFile);
+          const changed = bundle.changedByFile.get(targetFile) ?? false;
+          const nextContent = bundle.nextContentByFile.get(targetFile);
+          const previousContent = bundle.previousContentByFile.get(targetFile) ?? '';
+          const tablesChanged = bundle.tablesChangedByFile.get(targetFile) ?? 0;
+
+          if (changed && typeof nextContent === 'string') {
+            await writeFileAtomically(filePath, nextContent);
+            writtenFilesRollback.push({ filePath, previousContent });
+            updatedFiles.push({
+              fileName: targetFile,
+              relativePath: `public/supabase/queries/${targetFile}`,
+              written: true,
+              changed: true,
+              sizeBytes: Buffer.byteLength(nextContent, 'utf8'),
+              tablesChanged,
+            });
+          } else {
+            updatedFiles.push({
+              fileName: targetFile,
+              relativePath: `public/supabase/queries/${targetFile}`,
+              written: false,
+              changed: false,
+              sizeBytes: Buffer.byteLength(previousContent, 'utf8'),
+              tablesChanged: 0,
+            });
+          }
+        }
+      } catch (writeErr) {
+        for (let i = writtenFilesRollback.length - 1; i >= 0; i -= 1) {
+          const snap = writtenFilesRollback[i];
+          await writeFileAtomically(snap.filePath, snap.previousContent).catch(() => undefined);
+        }
+        throw writeErr;
+      }
+
+      const responsePayload: SeedSyncApplyResponse = {
+        ok: true,
+        plan: bundle.plan,
+        updatedFiles,
+        summaryByTable: bundle.summaryByTable,
+        warnings: bundle.warnings,
+        appliedAt: new Date().toISOString(),
+      };
+      res.status(200).json(responsePayload);
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: sanitizeSeedSyncServerError(
+          err,
+          'No se pudo escribir de forma atómica la sincronización en los archivos SQL.'
+        ),
+      });
     }
   });
 
