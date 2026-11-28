@@ -1724,3 +1724,9 @@ export function getSyncedSameNormPeerCertIds(params: {
 
   return peerIds;
 }
+
+export {
+  parseAndConsolidateProcesoBatchClauseInput,
+  type ProcesoBatchTextSelectionResult,
+} from './procesoClauseBatchParser';
+

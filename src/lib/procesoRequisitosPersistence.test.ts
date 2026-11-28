@@ -526,14 +526,14 @@ test('Picker typography and Zone 1/2/3 layout parity between procesoView and noA
     requirementsCatalog: catalog,
   });
 
-  // Code + title share primary styling with colon; title-less code uses primary styling without colon
+  // Code + title share primary styling with colon and spacing; title-less code uses primary styling without colon
   assert.ok(
     procHtml.includes(
-      '<span class="font-bold text-slate-900"><span class="font-mono">4.1</span> Comprensión de la organización y de su contexto:</span>'
+      '<span class="font-bold text-slate-900"><span class="font-mono mr-2">4.1</span> Comprensión de la organización y de su contexto:</span>'
     )
   );
   assert.ok(
-    procHtml.includes('<span class="font-mono font-bold text-slate-900">4.4</span>')
+    procHtml.includes('<span class="font-mono font-bold text-slate-900 mr-2">4.4</span>')
   );
   assert.equal(procHtml.includes('4.4</span>:'), false);
   assert.ok(procHtml.includes('data-ancestor-ids='));

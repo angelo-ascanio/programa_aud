@@ -36,6 +36,7 @@ import {
   type ProcesoHallazgoLink,
   type ProcesoRequisitoLink,
 } from '../lib/procesoDomain';
+import type { ProcesoBatchTextSelectionResult } from '../lib/procesoClauseBatchParser';
 import { sortItems, type ColumnDefinition, type SortState } from '../lib/universalTemplate';
 import { renderListViewTable } from './universalTemplate';
 import {
@@ -80,6 +81,9 @@ export interface ProcesoViewState {
   selectedBatchRequisitoIds?: string[];
   expandedBatchClauseIds?: string[];
   searchExpandedBatchClauseIds?: string[];
+  isBatchTextHelperOpen?: boolean;
+  batchTextInput?: string;
+  batchTextFeedback?: ProcesoBatchTextSelectionResult | null;
   childSortState?: Partial<Record<ProcesoChildTab, SortState>>;
 }
 
@@ -772,6 +776,9 @@ export function renderProcesoView(props: ProcesoViewProps): string {
                 (state.batchFilterQuery || '').trim().length > 0
                   ? state.searchExpandedBatchClauseIds
                   : state.expandedBatchClauseIds,
+              isBatchTextHelperOpen: Boolean(state.isBatchTextHelperOpen),
+              batchTextInput: state.batchTextInput || '',
+              batchTextFeedback: state.batchTextFeedback ?? null,
               sortState: state.childSortState?.requisitos || DEFAULT_PROCESO_CHILD_SORT,
               columnWidths: tableColumnWidths?.['proceso-tab-requisitos'],
             });
@@ -1015,8 +1022,8 @@ export function renderProcesoBatchRowsSubsetHtml(params: {
       const tooltipText = row.rawText ? `${leadText} ${row.rawText}` : leadText;
       const primaryColorClass = row.disabled ? 'text-slate-500' : 'text-slate-900';
       const primaryLeadHtml = row.hasTitle
-        ? `<span class="font-bold ${primaryColorClass}"><span class="font-mono">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
-        : `<span class="font-mono font-bold ${primaryColorClass}">${escapeHtml(row.req.codigo)}</span>`;
+        ? `<span class="font-bold ${primaryColorClass}"><span class="font-mono mr-2">${escapeHtml(row.req.codigo)}</span> ${escapeHtml(row.titleText)}:</span>`
+        : `<span class="font-mono font-bold ${primaryColorClass}${row.rawText ? ' mr-2' : ''}">${escapeHtml(row.req.codigo)}</span>`;
       const rawTextHtml = row.rawText
         ? ` <span class="font-normal ${row.disabled ? 'text-slate-400' : 'text-slate-500'}">${escapeHtml(row.rawText)}</span>`
         : '';
@@ -1104,6 +1111,127 @@ export function renderProcesoBatchSummaryText(summary: {
   return `${selectedCount} cláusula${selectedCount === 1 ? '' : 's'} seleccionada${selectedCount === 1 ? '' : 's'} (cubre ${totalMandatoryCovered} obligatoria${totalMandatoryCovered === 1 ? '' : 's'} en total)`;
 }
 
+function renderProcesoBatchTextHelperPanel(params: {
+  normaCodigo: string;
+  batchTextInput: string;
+  batchTextFeedback: ProcesoBatchTextSelectionResult | null;
+}): string {
+  const { normaCodigo, batchTextInput, batchTextFeedback } = params;
+
+  const feedbackHtml = batchTextFeedback
+    ? (() => {
+        const hasWarnings =
+          batchTextFeedback.invalidTokens.length > 0 ||
+          batchTextFeedback.skippedExcludedCodes.length > 0;
+        const hasMatches = batchTextFeedback.finalSelectedCodes.length > 0;
+        const boxTone =
+          !hasMatches && hasWarnings
+            ? 'border-rose-200 bg-rose-50/70 text-rose-900'
+            : hasWarnings
+            ? 'border-amber-200 bg-amber-50/70 text-slate-800'
+            : 'border-emerald-200 bg-emerald-50/70 text-emerald-950';
+
+        const detailLines: string[] = [];
+        if (batchTextFeedback.finalSelectedCodes.length > 0) {
+          detailLines.push(
+            `<div class="text-[11px] font-semibold text-emerald-800">✓ Seleccionadas (${batchTextFeedback.finalSelectedCodes.length}): <span class="font-mono">${escapeHtml(batchTextFeedback.finalSelectedCodes.join(', '))}</span></div>`
+          );
+        } else {
+          detailLines.push(
+            `<div class="text-[11px] font-semibold text-slate-700">No se agregaron cláusulas nuevas a la selección.</div>`
+          );
+        }
+        if (batchTextFeedback.rolledUpTransitions.length > 0) {
+          const rollupText = batchTextFeedback.rolledUpTransitions
+            .map((t) => `${t.fromCodes.join(' + ')} → ${t.toCode}`)
+            .join('; ');
+          detailLines.push(
+            `<div class="text-[11px] text-indigo-800"><span class="font-bold">↑ Consolidadas al padre:</span> <span class="font-mono">${escapeHtml(rollupText)}</span></div>`
+          );
+        }
+        if (batchTextFeedback.normalizedMappings.length > 0) {
+          const normText = batchTextFeedback.normalizedMappings
+            .map((m) => `${m.raw} → ${m.matchedCode}`)
+            .join(', ');
+          detailLines.push(
+            `<div class="text-[11px] text-slate-700"><span class="font-bold">✨ Normalizadas:</span> <span class="font-mono">${escapeHtml(normText)}</span></div>`
+          );
+        }
+        if (batchTextFeedback.skippedAlreadyLinkedCodes.length > 0) {
+          detailLines.push(
+            `<div class="text-[11px] text-slate-600"><span class="font-bold">✓ Ya vinculadas al proceso (omitidas):</span> <span class="font-mono">${escapeHtml(batchTextFeedback.skippedAlreadyLinkedCodes.join(', '))}</span></div>`
+          );
+        }
+        if (batchTextFeedback.skippedExcludedCodes.length > 0) {
+          detailLines.push(
+            `<div class="text-[11px] font-semibold text-rose-700">⛔ Excluidas por ISO 4.3 (no seleccionables): <span class="font-mono">${escapeHtml(batchTextFeedback.skippedExcludedCodes.join(', '))}</span></div>`
+          );
+        }
+        if (batchTextFeedback.invalidTokens.length > 0) {
+          detailLines.push(
+            `<div class="text-[11px] font-semibold text-amber-800">⚠️ No reconocidas en ${escapeHtml(normaCodigo)}: <span class="font-mono">${escapeHtml(batchTextFeedback.invalidTokens.join(', '))}</span></div>`
+          );
+        }
+
+        return `
+          <div id="procesoBatchTextHelperFeedback" class="rounded-lg border px-3 py-2 space-y-1 ${boxTone}">
+            ${detailLines.join('')}
+          </div>
+        `;
+      })()
+    : '';
+
+  return `
+    <div id="procesoBatchTextHelperPanel" class="rounded-xl border border-indigo-200 bg-white p-3 space-y-2.5 shadow-xs">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <label for="procesoBatchClauseListTextarea" class="block text-xs font-bold text-slate-800">
+            Pegar o Escribir Lista de Cláusulas (${escapeHtml(normaCodigo)})
+          </label>
+          <p class="text-[11px] text-slate-500">
+            Separa códigos por comas, saltos de línea, punto y coma o rangos (ej. <span class="font-mono">4.1, 4.3.a, 6.2.1, 6.2.2, 9.1.1</span>). Si incluyes todos los hijos de una cláusula aplicable, se consolidará hasta el segundo nivel (sin agrupar en capítulos como <span class="font-mono">4</span> o <span class="font-mono">6</span>).
+          </p>
+        </div>
+      </div>
+
+      <textarea
+        id="procesoBatchClauseListTextarea"
+        rows="3"
+        placeholder="Ej.: 4.1, 4.2, 4.3.a, 4.3.b, 4.4, 5.3, 6.1, 6.2.1, 6.2.2, 9.1.1, 10.1-10.3"
+        class="w-full rounded-lg border border-slate-300 bg-slate-50/50 px-3 py-2 text-xs font-mono text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+      >${escapeHtml(batchTextInput)}</textarea>
+
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            data-action="apply-proceso-batch-text-list"
+            class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+          >
+            Aplicar Lista
+          </button>
+          <button
+            type="button"
+            data-action="clear-proceso-batch-text-list"
+            class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+          >
+            Limpiar Texto
+          </button>
+        </div>
+        <button
+          type="button"
+          data-action="toggle-proceso-batch-text-helper"
+          class="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+        >
+          Cerrar
+        </button>
+      </div>
+
+      ${feedbackHtml}
+    </div>
+  `;
+}
+
 function renderProcesoRequisitosTab(params: {
   proceso: ProcesoDetailEntity;
   requisitos: ReadonlyArray<ProcesoRequisitoLink>;
@@ -1122,6 +1250,9 @@ function renderProcesoRequisitosTab(params: {
   batchFilterQuery: string;
   selectedBatchRequisitoIds: ReadonlyArray<string>;
   expandedBatchClauseIds?: ReadonlyArray<string>;
+  isBatchTextHelperOpen?: boolean;
+  batchTextInput?: string;
+  batchTextFeedback?: ProcesoBatchTextSelectionResult | null;
   sortState: SortState;
   columnWidths?: Record<string, number>;
 }): string {
@@ -1139,6 +1270,9 @@ function renderProcesoRequisitosTab(params: {
     batchFilterQuery,
     selectedBatchRequisitoIds,
     expandedBatchClauseIds,
+    isBatchTextHelperOpen = false,
+    batchTextInput = '',
+    batchTextFeedback = null,
     sortState,
     columnWidths,
   } = params;
@@ -1384,6 +1518,18 @@ function renderProcesoRequisitosTab(params: {
                     <div class="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
+                        data-action="toggle-proceso-batch-text-helper"
+                        aria-expanded="${isBatchTextHelperOpen}"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                          isBatchTextHelperOpen
+                            ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                            : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'
+                        }"
+                      >
+                        📋 Selección por Lista
+                      </button>
+                      <button
+                        type="button"
                         data-action="select-pending-mandatory-clauses"
                         class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
                       >
@@ -1398,6 +1544,16 @@ function renderProcesoRequisitosTab(params: {
                       </button>
                     </div>
                   </div>
+
+                  ${
+                    isBatchTextHelperOpen
+                      ? renderProcesoBatchTextHelperPanel({
+                          normaCodigo: proceso.norma_codigo,
+                          batchTextInput,
+                          batchTextFeedback,
+                        })
+                      : ''
+                  }
 
                   <div class="flex flex-col lg:flex-row lg:items-center gap-2">
                     <div class="relative flex-1 min-w-[220px]">

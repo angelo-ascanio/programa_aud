@@ -895,6 +895,9 @@ export function renderCertificacionView(
         selectedBatchRequisitoIds: state.procesoState?.selectedBatchRequisitoIds ?? [],
         expandedBatchClauseIds: state.procesoState?.expandedBatchClauseIds,
         searchExpandedBatchClauseIds: state.procesoState?.searchExpandedBatchClauseIds,
+        isBatchTextHelperOpen: Boolean(state.procesoState?.isBatchTextHelperOpen),
+        batchTextInput: state.procesoState?.batchTextInput ?? '',
+        batchTextFeedback: state.procesoState?.batchTextFeedback ?? null,
         childSortState: state.procesoState?.childSortState,
       };
 

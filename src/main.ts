@@ -702,6 +702,7 @@ import {
   type ProcesoDetailEntity,
   type ProcesoFormDraft,
 } from './lib/procesoDomain';
+import { parseAndConsolidateProcesoBatchClauseInput } from './lib/procesoClauseBatchParser';
 import {
   persistRequisitosPorProcesoDelete,
   persistRequisitosPorProcesoInsert,
@@ -1887,6 +1888,9 @@ const state: AppState = {
     batchFilterQuery: '',
     batchMode: 'mandatory',
     selectedBatchRequisitoIds: [],
+    isBatchTextHelperOpen: false,
+    batchTextInput: '',
+    batchTextFeedback: null,
     childSortState: {},
   },
   turnoDomain: {
@@ -3654,6 +3658,9 @@ function clearAllEntitySelections(): void {
   state.procesoDomain.selectedBatchRequisitoIds = [];
   state.procesoDomain.expandedBatchClauseIds = undefined;
   state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+  state.procesoDomain.isBatchTextHelperOpen = false;
+  state.procesoDomain.batchTextInput = '';
+  state.procesoDomain.batchTextFeedback = null;
 
   state.turnoDomain.selectedTurnoId = null;
   state.turnoDomain.originatingSitioId = null;
@@ -20348,6 +20355,9 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.selectedBatchRequisitoIds = [];
     state.procesoDomain.expandedBatchClauseIds = undefined;
     state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+    state.procesoDomain.isBatchTextHelperOpen = false;
+    state.procesoDomain.batchTextInput = '';
+    state.procesoDomain.batchTextFeedback = null;
 
     state.breadcrumbs = pushBreadcrumb(state.breadcrumbs, {
       id: `proceso-${procesoId}`,
@@ -20397,6 +20407,9 @@ function bindAuthenticatedEvents(): void {
           selectedBatchRequisitoIds: [],
           expandedBatchClauseIds: undefined,
           searchExpandedBatchClauseIds: undefined,
+          isBatchTextHelperOpen: false,
+          batchTextInput: '',
+          batchTextFeedback: null,
           childSortState: state.procesoDomain.childSortState,
         };
 
@@ -21061,6 +21074,9 @@ function bindAuthenticatedEvents(): void {
           state.procesoDomain.selectedBatchRequisitoIds = [];
           state.procesoDomain.expandedBatchClauseIds = undefined;
           state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+          state.procesoDomain.isBatchTextHelperOpen = false;
+          state.procesoDomain.batchTextInput = '';
+          state.procesoDomain.batchTextFeedback = null;
         }
         render();
       });
@@ -21792,6 +21808,146 @@ function bindAuthenticatedEvents(): void {
       });
     });
 
+  document
+    .querySelectorAll<HTMLElement>('[data-action="toggle-proceso-batch-text-helper"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const nextOpen = !state.procesoDomain.isBatchTextHelperOpen;
+        state.procesoDomain.isBatchTextHelperOpen = nextOpen;
+        render();
+        if (nextOpen) {
+          const textarea = document.getElementById(
+            'procesoBatchClauseListTextarea'
+          ) as HTMLTextAreaElement | null;
+          textarea?.focus();
+        }
+      });
+    });
+
+  document
+    .getElementById('procesoBatchClauseListTextarea')
+    ?.addEventListener('input', (ev) => {
+      state.procesoDomain.batchTextInput = (ev.target as HTMLTextAreaElement).value;
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="clear-proceso-batch-text-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        state.procesoDomain.batchTextInput = '';
+        state.procesoDomain.batchTextFeedback = null;
+        render();
+        const textarea = document.getElementById(
+          'procesoBatchClauseListTextarea'
+        ) as HTMLTextAreaElement | null;
+        textarea?.focus();
+      });
+    });
+
+  document
+    .querySelectorAll<HTMLElement>('[data-action="apply-proceso-batch-text-list"]')
+    .forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!isApprovedStaff()) return;
+        const ctx = resolveActiveProcesoContext();
+        if (!ctx) return;
+
+        const textarea = document.getElementById(
+          'procesoBatchClauseListTextarea'
+        ) as HTMLTextAreaElement | null;
+        const rawText = textarea ? textarea.value : state.procesoDomain.batchTextInput || '';
+        state.procesoDomain.batchTextInput = rawText;
+
+        if (!rawText.trim()) {
+          showFloatingToast(
+            'Pega o escribe al menos una cláusula para aplicar la selección.',
+            'warning'
+          );
+          textarea?.focus();
+          return;
+        }
+
+        const currentMode = state.procesoDomain.batchMode || 'mandatory';
+        const result = parseAndConsolidateProcesoBatchClauseInput({
+          rawText,
+          cert: ctx.parentCert,
+          currentProceso: ctx.currentProceso,
+          requirementsCatalog: ctx.catalogSnapshot,
+          existingSelectedIds: state.procesoDomain.selectedBatchRequisitoIds || [],
+          currentBatchMode: currentMode,
+          archivedProcesoIds: state.domainData.archivedProcesoIds,
+          archivedNoAplicableIds: state.domainData.archivedNoAplicableIds,
+        });
+
+        state.procesoDomain.selectedBatchRequisitoIds = result.finalSelectedIds;
+        state.procesoDomain.batchTextFeedback = result;
+        const nextMode = result.recommendedBatchMode;
+        state.procesoDomain.batchMode = nextMode;
+
+        const fullPickerData = getMemoizedProcesoBatchPickerData({
+          cert: ctx.parentCert,
+          currentProceso: ctx.currentProceso,
+          catalogSnapshot: ctx.catalogSnapshot,
+          mode: nextMode,
+          filterQuery: '',
+        });
+        const baseExpanded =
+          state.procesoDomain.expandedBatchClauseIds ??
+          getDefaultExpandedClauseIds(fullPickerData.rows);
+        state.procesoDomain.expandedBatchClauseIds = Array.from(
+          new Set([...baseExpanded, ...result.requiredExpandedAncestorIds])
+        );
+
+        const activeFilterQuery = state.procesoDomain.batchFilterQuery || '';
+        if (activeFilterQuery.trim().length > 0 && result.finalSelectedIds.length > 0) {
+          const filteredPickerData = getMemoizedProcesoBatchPickerData({
+            cert: ctx.parentCert,
+            currentProceso: ctx.currentProceso,
+            catalogSnapshot: ctx.catalogSnapshot,
+            mode: nextMode,
+            filterQuery: activeFilterQuery,
+          });
+          const filteredIds = new Set(filteredPickerData.rows.map((r) => r.req.id));
+          if (result.finalSelectedIds.some((id) => !filteredIds.has(id))) {
+            state.procesoDomain.batchFilterQuery = '';
+            state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+          } else {
+            const baseSearchExpanded =
+              state.procesoDomain.searchExpandedBatchClauseIds ??
+              getDefaultExpandedClauseIds(filteredPickerData.rows);
+            state.procesoDomain.searchExpandedBatchClauseIds = Array.from(
+              new Set([...baseSearchExpanded, ...result.requiredExpandedAncestorIds])
+            );
+          }
+        }
+
+        const hasWarnings =
+          result.invalidTokens.length > 0 || result.skippedExcludedCodes.length > 0;
+        if (result.finalSelectedCodes.length === 0) {
+          showFloatingToast(
+            hasWarnings
+              ? 'No se seleccionaron cláusulas válidas. Revisa el detalle en el asistente.'
+              : 'No se encontraron cláusulas nuevas para seleccionar.',
+            'warning'
+          );
+        } else if (hasWarnings) {
+          showFloatingToast(
+            `${result.finalSelectedCodes.length} cláusula(s) seleccionadas; algunas entradas fueron omitidas o no reconocidas.`,
+            'info'
+          );
+        } else {
+          showFloatingToast(
+            `${result.finalSelectedCodes.length} cláusula(s) seleccionadas correctamente.`,
+            'success'
+          );
+        }
+
+        render();
+      });
+    });
+
   document.getElementById('assignProcesoRequisitosBatchForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!isApprovedStaff()) return;
@@ -21864,6 +22020,9 @@ function bindAuthenticatedEvents(): void {
     state.procesoDomain.selectedBatchRequisitoIds = [];
     state.procesoDomain.expandedBatchClauseIds = undefined;
     state.procesoDomain.searchExpandedBatchClauseIds = undefined;
+    state.procesoDomain.isBatchTextHelperOpen = false;
+    state.procesoDomain.batchTextInput = '';
+    state.procesoDomain.batchTextFeedback = null;
     showFloatingToast(
       `${delta.toInsert.length} cláusula(s) vinculadas correctamente a "${currentProceso.nombre_proceso}".`,
       'success'
@@ -36441,6 +36600,9 @@ function resetClientSessionState(): void {
     batchFilterQuery: '',
     batchMode: 'mandatory',
     selectedBatchRequisitoIds: [],
+    isBatchTextHelperOpen: false,
+    batchTextInput: '',
+    batchTextFeedback: null,
     childSortState: {},
   };
   state.turnoDomain = {

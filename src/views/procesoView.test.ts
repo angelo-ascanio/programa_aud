@@ -362,3 +362,82 @@ test('Step 1.3 procesoView: receiving shared certificates (same-norm independent
   assert.equal(assertZeroUuidExposure(sameNormBatchHtml).compliant, true);
 });
 
+test('procesoView batch picker renders code spacing and smart text selection helper safely with Zero-UUID', () => {
+  const catalog = getAllSeededNormaRequirements();
+  const certs = buildFixtureCerts(false);
+  const proc = resolveProcesoDetailById({
+    procesoId: PROC_ID,
+    activeCertId: CERT_A_ID,
+    certificates: certs,
+    programacionAudits: [],
+    phase5Findings: [],
+    requirementsCatalog: catalog,
+  });
+  assert.ok(proc);
+
+  const html = renderProcesoView({
+    profile: ADMIN_PROFILE,
+    state: {
+      selectedProcesoId: PROC_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_A_ID,
+      isEditingAttributes: false,
+      isAssigningRequisito: true,
+      batchMode: 'all',
+      isBatchTextHelperOpen: true,
+      batchTextInput: '6.2.1, 6.2.2, 99.9',
+      batchTextFeedback: {
+        finalSelectedIds: ['id-62'],
+        finalSelectedCodes: ['6.2'],
+        directMatchedCodes: ['6.2.1', '6.2.2'],
+        rolledUpTransitions: [{ fromCodes: ['6.2.1', '6.2.2'], toCode: '6.2' }],
+        prunedChildCodes: [],
+        skippedExcludedCodes: ['8.3'],
+        skippedAlreadyLinkedCodes: ['4.1'],
+        invalidTokens: ['99.9'],
+        normalizedMappings: [],
+        recommendedBatchMode: 'all',
+        requiredExpandedAncestorIds: [],
+        summaryText: 'Seleccionadas 1 cláusula(s): 6.2.',
+      },
+    },
+    proceso: proc,
+    activeCertId: CERT_A_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+
+  // 1. Checklist rows include horizontal spacing (mr-2) between monospace clause code and title/raw content
+  assert.ok(html.includes('<span class="font-mono mr-2">'));
+  // 2. Smart list helper controls and feedback panel render in Spanish
+  assert.ok(html.includes('data-action="toggle-proceso-batch-text-helper"'));
+  assert.ok(html.includes('id="procesoBatchTextHelperPanel"'));
+  assert.ok(html.includes('id="procesoBatchClauseListTextarea"'));
+  assert.ok(html.includes('data-action="apply-proceso-batch-text-list"'));
+  assert.ok(html.includes('id="procesoBatchTextHelperFeedback"'));
+  assert.ok(html.includes('6.2.1 + 6.2.2 → 6.2'));
+  assert.ok(html.includes('Excluidas por ISO 4.3'));
+  assert.ok(html.includes('99.9'));
+  assert.equal(assertZeroUuidExposure(html).compliant, true);
+
+  // 3. AUDITOR never sees management panel or text helper
+  const auditorHtml = renderProcesoView({
+    profile: AUDITOR_PROFILE,
+    state: {
+      selectedProcesoId: PROC_ID,
+      activeChildTab: 'requisitos',
+      prefillCertId: CERT_A_ID,
+      isEditingAttributes: false,
+      isAssigningRequisito: true,
+      isBatchTextHelperOpen: true,
+    },
+    proceso: proc,
+    activeCertId: CERT_A_ID,
+    certificates: certs,
+    requirementsCatalog: catalog,
+  });
+  assert.equal(auditorHtml.includes('id="procesoBatchTextHelperPanel"'), false);
+  assert.equal(auditorHtml.includes('data-action="toggle-proceso-batch-text-helper"'), false);
+});
+
+
